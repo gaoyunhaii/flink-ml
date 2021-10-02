@@ -19,8 +19,17 @@
 package org.apache.flink.iteration;
 
 import org.apache.flink.annotation.Experimental;
+import org.apache.flink.iteration.operator.OperatorWrapper;
 import org.apache.flink.iteration.operator.allround.AllRoundOperatorWrapper;
-import org.apache.flink.util.Preconditions;
+import org.apache.flink.iteration.operator.perround.PerRoundOperatorWrapper;
+import org.apache.flink.streaming.api.datastream.DataStream;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 /**
  * A helper class to create iterations. To construct an iteration, Users are required to provide
@@ -89,7 +98,12 @@ public class Iterations {
     public static DataStreamList iterateUnboundedStreams(
             DataStreamList initVariableStreams, DataStreamList dataStreams, IterationBody body) {
         return IterationFactory.createIteration(
-                initVariableStreams, dataStreams, body, new AllRoundOperatorWrapper(), false);
+                initVariableStreams,
+                dataStreams,
+                Collections.emptySet(),
+                body,
+                new AllRoundOperatorWrapper(),
+                false);
     }
 
     /**
@@ -112,15 +126,26 @@ public class Iterations {
             ReplayableDataStreamList dataStreams,
             IterationConfig config,
             IterationBody body) {
-        Preconditions.checkArgument(
-                config.getOperatorLifeCycle() == IterationConfig.OperatorLifeCycle.ALL_ROUND);
-        Preconditions.checkArgument(dataStreams.getReplayedDataStreams().size() == 0);
+        OperatorWrapper wrapper =
+                config.getOperatorLifeCycle() == IterationConfig.OperatorLifeCycle.ALL_ROUND
+                        ? new AllRoundOperatorWrapper<>()
+                        : new PerRoundOperatorWrapper<>();
+
+        List<DataStream<?>> allDatastreams = new ArrayList<>();
+        allDatastreams.addAll(dataStreams.getReplayedDataStreams());
+        allDatastreams.addAll(dataStreams.getNonReplayedStreams());
+
+        Set<Integer> replayedIndices =
+                IntStream.range(0, dataStreams.getReplayedDataStreams().size())
+                        .boxed()
+                        .collect(Collectors.toSet());
 
         return IterationFactory.createIteration(
                 initVariableStreams,
-                new DataStreamList(dataStreams.getNonReplayedStreams()),
+                new DataStreamList(allDatastreams),
+                replayedIndices,
                 body,
-                new AllRoundOperatorWrapper(),
+                wrapper,
                 true);
     }
 }
