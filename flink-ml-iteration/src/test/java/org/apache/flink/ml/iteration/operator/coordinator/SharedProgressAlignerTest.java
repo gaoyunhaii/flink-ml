@@ -19,6 +19,7 @@
 package org.apache.flink.ml.iteration.operator.coordinator;
 
 import org.apache.flink.ml.iteration.IterationID;
+import org.apache.flink.ml.iteration.operator.event.CoordinatorCheckpointEvent;
 import org.apache.flink.ml.iteration.operator.event.GloballyAlignedEvent;
 import org.apache.flink.ml.iteration.operator.event.SubtaskAlignedEvent;
 import org.apache.flink.runtime.jobgraph.OperatorID;
@@ -31,7 +32,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.function.Consumer;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -63,22 +63,22 @@ public class SharedProgressAlignerTest {
     }
 
     @Test
-    public void testRegisterAndUnregisterConsumers() {
+    public void testRegisterAndUnregisterListeners() {
         IterationID iterationId = new IterationID();
         List<OperatorID> operatorIds = Arrays.asList(new OperatorID(), new OperatorID());
-        List<Consumer<GloballyAlignedEvent>> consumers =
-                Arrays.asList(new RecordingConsumer(), new RecordingConsumer());
+        List<SharedProgressAlignerListener> listeners =
+                Arrays.asList(new RecordingListener(), new RecordingListener());
         SharedProgressAligner aligner =
-                initializeAligner(iterationId, operatorIds, Arrays.asList(2, 3), consumers);
+                initializeAligner(iterationId, operatorIds, Arrays.asList(2, 3), listeners);
 
-        assertEquals(2, aligner.getNumberConsumers());
+        assertEquals(2, aligner.getNumberListeners());
 
         aligner.unregisterConsumer(operatorIds.get(0));
-        assertEquals(1, aligner.getNumberConsumers());
+        assertEquals(1, aligner.getNumberListeners());
         assertTrue(SharedProgressAligner.getInstances().containsKey(iterationId));
 
         aligner.unregisterConsumer(operatorIds.get(1));
-        assertEquals(0, aligner.getNumberConsumers());
+        assertEquals(0, aligner.getNumberListeners());
         assertFalse(SharedProgressAligner.getInstances().containsKey(iterationId));
     }
 
@@ -87,10 +87,10 @@ public class SharedProgressAlignerTest {
         IterationID iterationId = new IterationID();
         List<OperatorID> operatorIds = Arrays.asList(new OperatorID(), new OperatorID());
         List<Integer> parallelisms = Arrays.asList(2, 3);
-        List<RecordingConsumer> consumers =
-                Arrays.asList(new RecordingConsumer(), new RecordingConsumer());
+        List<RecordingListener> listeners =
+                Arrays.asList(new RecordingListener(), new RecordingListener());
         SharedProgressAligner aligner =
-                initializeAligner(iterationId, operatorIds, parallelisms, consumers);
+                initializeAligner(iterationId, operatorIds, parallelisms, listeners);
 
         for (int i = 0; i < operatorIds.size(); ++i) {
             for (int j = 0; j < parallelisms.get(i); ++j) {
@@ -99,8 +99,8 @@ public class SharedProgressAlignerTest {
             }
         }
 
-        checkRecordingConsumers(
-                Collections.singletonList(new GloballyAlignedEvent(2, false)), consumers);
+        checkRecordingListeners(
+                Collections.singletonList(new GloballyAlignedEvent(2, false)), listeners);
     }
 
     @Test
@@ -108,10 +108,10 @@ public class SharedProgressAlignerTest {
         IterationID iterationId = new IterationID();
         List<OperatorID> operatorIds = Arrays.asList(new OperatorID(), new OperatorID());
         List<Integer> parallelisms = Arrays.asList(2, 3);
-        List<RecordingConsumer> consumers =
-                Arrays.asList(new RecordingConsumer(), new RecordingConsumer());
+        List<RecordingListener> listeners =
+                Arrays.asList(new RecordingListener(), new RecordingListener());
         SharedProgressAligner aligner =
-                initializeAligner(iterationId, operatorIds, parallelisms, consumers);
+                initializeAligner(iterationId, operatorIds, parallelisms, listeners);
 
         for (int i = 0; i < operatorIds.size(); ++i) {
             for (int j = 0; j < parallelisms.get(i); ++j) {
@@ -120,8 +120,8 @@ public class SharedProgressAlignerTest {
             }
         }
 
-        checkRecordingConsumers(
-                Collections.singletonList(new GloballyAlignedEvent(2, true)), consumers);
+        checkRecordingListeners(
+                Collections.singletonList(new GloballyAlignedEvent(2, true)), listeners);
     }
 
     @Test
@@ -129,10 +129,10 @@ public class SharedProgressAlignerTest {
         IterationID iterationId = new IterationID();
         List<OperatorID> operatorIds = Arrays.asList(new OperatorID(), new OperatorID());
         List<Integer> parallelisms = Arrays.asList(2, 3);
-        List<RecordingConsumer> consumers =
-                Arrays.asList(new RecordingConsumer(), new RecordingConsumer());
+        List<RecordingListener> listeners =
+                Arrays.asList(new RecordingListener(), new RecordingListener());
         SharedProgressAligner aligner =
-                initializeAligner(iterationId, operatorIds, parallelisms, consumers);
+                initializeAligner(iterationId, operatorIds, parallelisms, listeners);
 
         for (int i = 0; i < operatorIds.size(); ++i) {
             for (int j = 0; j < parallelisms.get(i); ++j) {
@@ -141,8 +141,8 @@ public class SharedProgressAlignerTest {
             }
         }
 
-        checkRecordingConsumers(
-                Collections.singletonList(new GloballyAlignedEvent(0, false)), consumers);
+        checkRecordingListeners(
+                Collections.singletonList(new GloballyAlignedEvent(0, false)), listeners);
     }
 
     @Test
@@ -150,10 +150,10 @@ public class SharedProgressAlignerTest {
         IterationID iterationId = new IterationID();
         List<OperatorID> operatorIds = Arrays.asList(new OperatorID(), new OperatorID());
         List<Integer> parallelisms = Arrays.asList(2, 3);
-        List<RecordingConsumer> consumers =
-                Arrays.asList(new RecordingConsumer(), new RecordingConsumer());
+        List<RecordingListener> listeners =
+                Arrays.asList(new RecordingListener(), new RecordingListener());
         SharedProgressAligner aligner =
-                initializeAligner(iterationId, operatorIds, parallelisms, consumers);
+                initializeAligner(iterationId, operatorIds, parallelisms, listeners);
 
         for (int i = 0; i < operatorIds.size(); ++i) {
             for (int j = 0; j < parallelisms.get(i); ++j) {
@@ -163,15 +163,15 @@ public class SharedProgressAlignerTest {
             }
         }
 
-        checkRecordingConsumers(
-                Collections.singletonList(new GloballyAlignedEvent(2, true)), consumers);
+        checkRecordingListeners(
+                Collections.singletonList(new GloballyAlignedEvent(2, true)), listeners);
     }
 
     private SharedProgressAligner initializeAligner(
             IterationID iterationId,
             List<OperatorID> operatorIds,
             List<Integer> parallelisms,
-            List<? extends Consumer<GloballyAlignedEvent>> consumers) {
+            List<? extends SharedProgressAlignerListener> listeners) {
 
         SharedProgressAligner aligner =
                 SharedProgressAligner.getOrCreate(
@@ -180,28 +180,35 @@ public class SharedProgressAlignerTest {
                         new MockOperatorCoordinatorContext(operatorIds.get(0), parallelisms.get(0)),
                         DirectScheduledExecutorService::new);
 
-        for (int i = 0; i < consumers.size(); ++i) {
-            aligner.registerAlignedConsumer(operatorIds.get(i), consumers.get(i));
+        for (int i = 0; i < listeners.size(); ++i) {
+            aligner.registerAlignedConsumer(operatorIds.get(i), listeners.get(i));
         }
 
         return aligner;
     }
 
-    private void checkRecordingConsumers(
+    private void checkRecordingListeners(
             List<GloballyAlignedEvent> expectedGloballyAlignedEvents,
-            List<RecordingConsumer> consumers) {
-        for (RecordingConsumer consumer : consumers) {
+            List<RecordingListener> listeners) {
+        for (RecordingListener consumer : listeners) {
             assertEquals(expectedGloballyAlignedEvents, consumer.globallyAlignedEvents);
         }
     }
 
-    private static class RecordingConsumer implements Consumer<GloballyAlignedEvent> {
+    private static class RecordingListener implements SharedProgressAlignerListener {
 
         final List<GloballyAlignedEvent> globallyAlignedEvents = new ArrayList<>();
 
+        final List<CoordinatorCheckpointEvent> checkpointEvents = new ArrayList<>();
+
         @Override
-        public void accept(GloballyAlignedEvent globallyAlignedEvent) {
+        public void onAligned(GloballyAlignedEvent globallyAlignedEvent) {
             globallyAlignedEvents.add(globallyAlignedEvent);
+        }
+
+        @Override
+        public void onCheckpointAligned(CoordinatorCheckpointEvent coordinatorCheckpointEvent) {
+            checkpointEvents.add(coordinatorCheckpointEvent);
         }
     }
 }
