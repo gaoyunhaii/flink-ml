@@ -20,11 +20,23 @@ package org.apache.flink.ml.iteration.operator;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.operators.MailboxExecutor;
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
+import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.base.IntSerializer;
+import org.apache.flink.api.common.typeutils.base.LongSerializer;
+import org.apache.flink.api.common.typeutils.base.MapSerializer;
+import org.apache.flink.core.fs.FileSystem;
+import org.apache.flink.core.fs.Path;
 import org.apache.flink.ml.iteration.IterationID;
 import org.apache.flink.ml.iteration.IterationRecord;
 import org.apache.flink.ml.iteration.broadcast.BroadcastOutput;
 import org.apache.flink.ml.iteration.broadcast.BroadcastOutputFactory;
+import org.apache.flink.ml.iteration.checkpoint.Checkpoints;
+import org.apache.flink.ml.iteration.config.IterationOptions;
+import org.apache.flink.ml.iteration.datacache.nonkeyed.DataCacheSnapshot;
+import org.apache.flink.ml.iteration.operator.event.CoordinatorCheckpointEvent;
 import org.apache.flink.ml.iteration.operator.event.GloballyAlignedEvent;
 import org.apache.flink.ml.iteration.operator.event.SubtaskAlignedEvent;
 import org.apache.flink.ml.iteration.typeinfo.IterationRecordTypeInfo;
@@ -32,6 +44,8 @@ import org.apache.flink.runtime.operators.coordination.OperatorEvent;
 import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
 import org.apache.flink.runtime.operators.coordination.OperatorEventHandler;
 import org.apache.flink.runtime.state.StateInitializationContext;
+import org.apache.flink.runtime.state.StatePartitionStreamProvider;
+import org.apache.flink.runtime.state.StateSnapshotContext;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannelBroker;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackConsumer;
@@ -46,12 +60,21 @@ import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.ProcessingTimeService;
 import org.apache.flink.streaming.runtime.tasks.StreamTask;
 import org.apache.flink.util.ExceptionUtils;
+import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.OutputTag;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
+import java.util.UUID;
 import java.util.concurrent.Executor;
+
+import static org.apache.flink.util.Preconditions.checkState;
 
 /**
  * The head operators unions the initialized variable stream and the feedback stream, and
@@ -76,6 +99,8 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
 
     private final MailboxExecutor mailboxExecutor;
 
+    // ------------- runtime -------------------
+
     private final Map<Integer, Long> numFeedbackRecordsPerRound;
 
     private transient BroadcastOutput<?> eventBroadcastOutput;
@@ -83,6 +108,18 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     private transient StreamRecord<IterationRecord<?>> reusable;
 
     private transient boolean shouldTerminate;
+
+    // ------------- checkpoints -------------------
+
+    private final TreeMap<Long, CheckpointAlignmentStatus> checkpointAlignmmentStatuses;
+
+    private long latestCheckpointFromCoordinator;
+
+    private transient Checkpoints<IterationRecord<?>> checkpoints;
+
+    private transient ListState<Integer> parallelismState;
+
+    private transient ListState<Map<Integer, Long>> numFeedbackRecordsState;
 
     public HeadOperator(
             IterationID iterationId,
@@ -97,6 +134,8 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         this.mailboxExecutor = Objects.requireNonNull(mailboxExecutor);
         this.operatorEventGateway = Objects.requireNonNull(operatorEventGateway);
         this.numFeedbackRecordsPerRound = new HashMap<>();
+
+        this.checkpointAlignmmentStatuses = new TreeMap<>();
 
         // Even though this operator does not use the processing
         // time service, AbstractStreamOperator requires this
@@ -118,8 +157,64 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     @Override
     public void initializeState(StateInitializationContext context) throws Exception {
         super.initializeState(context);
-
         reusable = new StreamRecord<>(null);
+
+        parallelismState =
+                context.getOperatorStateStore()
+                        .getUnionListState(
+                                new ListStateDescriptor<>("parallelism", IntSerializer.INSTANCE));
+        List<Integer> parallelismStateElements = new ArrayList<>();
+        parallelismState.get().forEach(parallelismStateElements::add);
+        checkState(
+                parallelismStateElements.size() <= 1,
+                "There should be at most one parallelism state element");
+        if (parallelismStateElements.size() > 0
+                && parallelismStateElements.get(0)
+                        != getRuntimeContext().getNumberOfParallelSubtasks()) {
+            throw new FlinkRuntimeException(
+                    String.format(
+                            "The Head operator is recovered from a state with parallelism %d, "
+                                    + "but the current parallelism is %d, which is not supported",
+                            parallelismStateElements.get(0),
+                            getRuntimeContext().getNumberOfParallelSubtasks()));
+        }
+
+        numFeedbackRecordsState =
+                context.getOperatorStateStore()
+                        .getListState(
+                                new ListStateDescriptor<>(
+                                        "numFeedbacks",
+                                        new MapSerializer<>(
+                                                IntSerializer.INSTANCE, LongSerializer.INSTANCE)));
+        Iterator<Map<Integer, Long>> numFeedbackRecordsStateIterator =
+                numFeedbackRecordsState.get().iterator();
+        if (numFeedbackRecordsStateIterator.hasNext()) {
+            numFeedbackRecordsPerRound.putAll(numFeedbackRecordsStateIterator.next());
+        }
+
+        Path basePath =
+                new Path(
+                        getContainingTask()
+                                .getEnvironment()
+                                .getTaskManagerInfo()
+                                .getConfiguration()
+                                .get(IterationOptions.DATA_CACHE_PATH));
+        FileSystem fileSystem = basePath.getFileSystem();
+        TypeSerializer<IterationRecord<?>> typeSerializer =
+                config.getTypeSerializerOut(getClass().getClassLoader());
+        checkpoints =
+                new Checkpoints<>(
+                        typeSerializer,
+                        fileSystem,
+                        () -> new Path(basePath, "/checkpoint." + UUID.randomUUID().toString()));
+
+        for (StatePartitionStreamProvider rawStateInput : context.getRawOperatorStateInputs()) {
+            DataCacheSnapshot.replay(
+                    rawStateInput.getStream(),
+                    typeSerializer,
+                    fileSystem,
+                    (record) -> processRecord(new StreamRecord<>(record)));
+        }
 
         // Here we register a record
         registerFeedbackConsumer(
@@ -131,18 +226,65 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     }
 
     @Override
+    public void prepareSnapshotPreBarrier(long checkpointId) throws Exception {
+        super.prepareSnapshotPreBarrier(checkpointId);
+
+        // We must wait till we have received the notification from the coordinator.
+        CheckpointAlignmentStatus checkpointAlignmentStatus =
+                checkpointAlignmmentStatuses.computeIfAbsent(
+                        checkpointId, ignored -> new CheckpointAlignmentStatus(true, false));
+        while (!checkpointAlignmentStatus.notifiedFromCoordinator) {
+            mailboxExecutor.yield();
+        }
+    }
+
+    @Override
+    public void snapshotState(StateSnapshotContext context) throws Exception {
+        super.snapshotState(context);
+
+        parallelismState.clear();
+        if (getRuntimeContext().getIndexOfThisSubtask() == 0) {
+            parallelismState.update(
+                    Collections.singletonList(getRuntimeContext().getNumberOfParallelSubtasks()));
+        }
+        numFeedbackRecordsState.clear();
+        numFeedbackRecordsState.update(Collections.singletonList(numFeedbackRecordsPerRound));
+        checkpoints.startLogging(context.getCheckpointId(), context.getRawOperatorStateOutput());
+
+        CheckpointAlignmentStatus checkpointAlignmentStatus =
+                checkpointAlignmmentStatuses.remove(context.getCheckpointId());
+        checkState(
+                checkpointAlignmentStatus.notifiedFromCoordinator
+                        && checkpointAlignmentStatus.notifiedFromChannels,
+                "Checkpoint " + context.getCheckpointId() + " is not fully aligned");
+        for (GloballyAlignedEvent globallyAlignedEvent :
+                checkpointAlignmentStatus.pendingGlobalEvents) {
+            handleOperatorEvent(globallyAlignedEvent);
+        }
+    }
+
+    @Override
     public void processElement(StreamRecord<IterationRecord<?>> element) throws Exception {
         processRecord(element);
     }
 
     @Override
     public void processFeedback(StreamRecord<IterationRecord<?>> iterationRecord) throws Exception {
-        if (iterationRecord.getValue().getType() == IterationRecord.Type.RECORD) {
-            numFeedbackRecordsPerRound.compute(
-                    iterationRecord.getValue().getRound(),
-                    (round, count) -> count == null ? 1 : count + 1);
+        switch (iterationRecord.getValue().getType()) {
+            case RECORD:
+                numFeedbackRecordsPerRound.compute(
+                        iterationRecord.getValue().getRound(),
+                        (round, count) -> count == null ? 1 : count + 1);
+                processRecord(iterationRecord);
+                checkpoints.append(iterationRecord.getValue());
+                break;
+            case EPOCH_WATERMARK:
+                processRecord(iterationRecord);
+                break;
+            case BARRIER:
+                checkpoints.commitCheckpointsUntil(iterationRecord.getValue().getCheckpointId());
+                break;
         }
-        processRecord(iterationRecord);
     }
 
     private void processRecord(StreamRecord<IterationRecord<?>> iterationRecord) {
@@ -162,27 +304,46 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     @SuppressWarnings({"unchecked", "rawtypes"})
     public void handleOperatorEvent(OperatorEvent operatorEvent) {
         if (operatorEvent instanceof GloballyAlignedEvent) {
-            try {
-                GloballyAlignedEvent globallyAlignedEvent = (GloballyAlignedEvent) operatorEvent;
-                LOG.info("Received global event {}", globallyAlignedEvent);
+            GloballyAlignedEvent globallyAlignedEvent = (GloballyAlignedEvent) operatorEvent;
+            LOG.info("Received global event {}", globallyAlignedEvent);
 
-                shouldTerminate = globallyAlignedEvent.isTerminated();
-                reusable.replace(
-                        IterationRecord.newEpochWatermark(
-                                globallyAlignedEvent.isTerminated()
-                                        ? Integer.MAX_VALUE
-                                        : globallyAlignedEvent.getRound(),
-                                OperatorUtils.getUniqueSenderId(
-                                        getOperatorID(),
-                                        getRuntimeContext().getIndexOfThisSubtask())),
-                        0);
-                eventBroadcastOutput.broadcastEmit((StreamRecord) reusable);
+            // If it is received after operator coordinator notified the latest checkpoint,
+            // but the checkpoint is not snapshot, then we have to pending this event
+            // until the checkpoint is snapshot.
+            CheckpointAlignmentStatus checkpointAlignmentStatus =
+                    checkpointAlignmmentStatuses.get(latestCheckpointFromCoordinator);
+            if (checkpointAlignmentStatus != null
+                    && !checkpointAlignmentStatus.notifiedFromChannels) {
+                checkpointAlignmentStatus.pendingGlobalEvents.add(globallyAlignedEvent);
+            } else {
+                try {
+                    shouldTerminate = globallyAlignedEvent.isTerminated();
+                    reusable.replace(
+                            IterationRecord.newEpochWatermark(
+                                    globallyAlignedEvent.isTerminated()
+                                            ? Integer.MAX_VALUE
+                                            : globallyAlignedEvent.getRound(),
+                                    OperatorUtils.getUniqueSenderId(
+                                            getOperatorID(),
+                                            getRuntimeContext().getIndexOfThisSubtask())),
+                            0);
+                    eventBroadcastOutput.broadcastEmit((StreamRecord) reusable);
 
-                // Also notify the listener
-                output.collect(ALIGN_NOTIFY_OUTPUT_TAG, (StreamRecord) reusable);
-            } catch (Exception e) {
-                ExceptionUtils.rethrow(e);
+                    // Also notify the listener
+                    output.collect(ALIGN_NOTIFY_OUTPUT_TAG, (StreamRecord) reusable);
+                } catch (Exception e) {
+                    ExceptionUtils.rethrow(e);
+                }
             }
+        } else if (operatorEvent instanceof CoordinatorCheckpointEvent) {
+            CoordinatorCheckpointEvent checkpointEvent = (CoordinatorCheckpointEvent) operatorEvent;
+            latestCheckpointFromCoordinator =
+                    Math.max(latestCheckpointFromCoordinator, checkpointEvent.getCheckpointId());
+            checkpointAlignmmentStatuses.computeIfAbsent(
+                                    checkpointEvent.getCheckpointId(),
+                                    ignored -> new CheckpointAlignmentStatus(false, true))
+                            .notifiedFromCoordinator =
+                    true;
         }
     }
 
@@ -227,5 +388,22 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     @VisibleForTesting
     MailboxExecutor getMailboxExecutor() {
         return mailboxExecutor;
+    }
+
+    private static class CheckpointAlignmentStatus {
+
+        final List<GloballyAlignedEvent> pendingGlobalEvents;
+
+        boolean notifiedFromChannels;
+
+        boolean notifiedFromCoordinator;
+
+        public CheckpointAlignmentStatus(
+                boolean notifiedFromChannels, boolean notifiedFromCoordinator) {
+            this.pendingGlobalEvents = new ArrayList<>();
+
+            this.notifiedFromChannels = notifiedFromChannels;
+            this.notifiedFromCoordinator = notifiedFromCoordinator;
+        }
     }
 }

@@ -19,6 +19,7 @@
 package org.apache.flink.ml.iteration.operator.coordinator;
 
 import org.apache.flink.ml.iteration.IterationID;
+import org.apache.flink.ml.iteration.operator.event.CoordinatorCheckpointEvent;
 import org.apache.flink.ml.iteration.operator.event.GloballyAlignedEvent;
 import org.apache.flink.ml.iteration.operator.event.SubtaskAlignedEvent;
 import org.apache.flink.runtime.jobgraph.OperatorID;
@@ -32,7 +33,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.function.BiFunction;
+import java.util.stream.Collectors;
 
 import static org.junit.Assert.assertEquals;
 
@@ -40,7 +44,7 @@ import static org.junit.Assert.assertEquals;
 public class HeadOperatorCoordinatorTest {
 
     @Test(timeout = 60000L)
-    public void testForwardEvents() throws InterruptedException {
+    public void testForwardEvents() throws InterruptedException, ExecutionException {
         IterationID iterationId = new IterationID();
         List<OperatorID> operatorIds = Arrays.asList(new OperatorID(), new OperatorID());
         List<Integer> parallelisms = Arrays.asList(2, 3);
@@ -70,6 +74,22 @@ public class HeadOperatorCoordinatorTest {
                 parallelisms,
                 (i, j) -> Collections.singletonList(new SubtaskAlignedEvent(3, 0, false)));
         checkSentEvent(2, new GloballyAlignedEvent(3, true), receivingTasks, parallelisms);
+
+        List<CompletableFuture<byte[]>> stateFutures =
+                coordinators.stream()
+                        .map(ignored -> new CompletableFuture<byte[]>())
+                        .collect(Collectors.toList());
+        requestCheckpoint(coordinators, stateFutures, 5);
+        checkSentEvent(3, new CoordinatorCheckpointEvent(5), receivingTasks, parallelisms);
+        checkStateFuturesComplete(stateFutures);
+
+        stateFutures =
+                coordinators.stream()
+                        .map(ignored -> new CompletableFuture<byte[]>())
+                        .collect(Collectors.toList());
+        requestCheckpoint(coordinators, stateFutures, 6);
+        checkSentEvent(4, new CoordinatorCheckpointEvent(6), receivingTasks, parallelisms);
+        checkStateFuturesComplete(stateFutures);
     }
 
     private HeadOperatorCoordinator createCoordinator(
@@ -105,9 +125,18 @@ public class HeadOperatorCoordinatorTest {
         }
     }
 
+    private void requestCheckpoint(
+            List<HeadOperatorCoordinator> coordinators,
+            List<CompletableFuture<byte[]>> stateFutures,
+            long checkpointId) {
+        for (int i = 0; i < coordinators.size(); ++i) {
+            coordinators.get(i).checkpointCoordinator(checkpointId, stateFutures.get(i));
+        }
+    }
+
     private void checkSentEvent(
             int expectedNumEvents,
-            GloballyAlignedEvent expectedLastEvent,
+            OperatorEvent expectedLastEvent,
             List<EventReceivingTasks> receivingTasks,
             List<Integer> parallelisms)
             throws InterruptedException {
@@ -124,6 +153,13 @@ public class HeadOperatorCoordinatorTest {
                     break;
                 }
             }
+        }
+    }
+
+    private void checkStateFuturesComplete(List<CompletableFuture<byte[]>> stateFutures)
+            throws ExecutionException, InterruptedException {
+        for (CompletableFuture<byte[]> future : stateFutures) {
+            future.get();
         }
     }
 }

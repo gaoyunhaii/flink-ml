@@ -89,6 +89,26 @@ public class TailOperatorTest {
                 iterationRecords);
     }
 
+    @Test
+    public void testEmitBarrierToFeedbackChannel() throws Exception {
+        IterationID iterationId = new IterationID();
+
+        OneInputStreamOperatorTestHarness<IterationRecord<?>, Void> testHarness =
+                new OneInputStreamOperatorTestHarness<>(new TailOperator(iterationId, 0));
+        testHarness.open();
+
+        testHarness.prepareSnapshotPreBarrier(5);
+        testHarness.prepareSnapshotPreBarrier(6);
+
+        List<StreamRecord<IterationRecord<?>>> iterationRecords =
+                getFeedbackRecords(iterationId, 0, 0, 0);
+        assertEquals(
+                Arrays.asList(
+                        new StreamRecord<>(IterationRecord.newBarrier(5)),
+                        new StreamRecord<>(IterationRecord.newBarrier(6))),
+                iterationRecords);
+    }
+
     static List<StreamRecord<IterationRecord<?>>> getFeedbackRecords(
             IterationID iterationId, int feedbackIndex, int subtaskIndex, int attemptNumber) {
         FeedbackChannel<StreamRecord<IterationRecord<?>>> feedbackChannel =

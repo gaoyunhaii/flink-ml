@@ -79,6 +79,12 @@ public class TailOperator extends AbstractStreamOperator<Void>
         recordConsumer.accept(streamRecord);
     }
 
+    @Override
+    public void prepareSnapshotPreBarrier(long checkpointId) throws Exception {
+        super.prepareSnapshotPreBarrier(checkpointId);
+        channel.put(new StreamRecord<>(IterationRecord.newBarrier(checkpointId)));
+    }
+
     private void processIfObjectReuseEnabled(StreamRecord<IterationRecord<?>> record) {
         // Since the record would be reused, we have to clone a new one
         IterationRecord<?> cloned = record.getValue().clone();
