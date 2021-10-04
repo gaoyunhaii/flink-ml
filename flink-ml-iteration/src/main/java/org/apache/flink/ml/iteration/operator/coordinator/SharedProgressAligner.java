@@ -20,6 +20,7 @@ package org.apache.flink.ml.iteration.operator.coordinator;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.ml.iteration.IterationID;
+import org.apache.flink.ml.iteration.operator.event.CoordinatorCheckpointEvent;
 import org.apache.flink.ml.iteration.operator.event.GloballyAlignedEvent;
 import org.apache.flink.ml.iteration.operator.event.SubtaskAlignedEvent;
 import org.apache.flink.runtime.jobgraph.OperatorID;
@@ -152,7 +153,7 @@ public class SharedProgressAligner {
                 subtaskIndex);
     }
 
-    public void checkpointRequested(
+    public void requestCheckpoint(
             long checkpointId,
             int operatorParallelism,
             CompletableFuture<byte[]> snapshotStateFuture) {
@@ -165,6 +166,17 @@ public class SharedProgressAligner {
                     boolean aligned =
                             checkpointStatus.notify(operatorParallelism, snapshotStateFuture);
                     if (aligned) {
+                        CoordinatorCheckpointEvent checkpointEvent =
+                                new CoordinatorCheckpointEvent(checkpointId);
+                        for (SharedProgressAlignerListener listener : listeners.values()) {
+                            listener.onCheckpointAligned(checkpointEvent);
+                        }
+
+                        for (CompletableFuture<byte[]> stateFuture :
+                                checkpointStatus.getStateFutures()) {
+                            stateFuture.complete(new byte[0]);
+                        }
+
                         checkpointStatuses.remove(checkpointId);
                     }
                 },

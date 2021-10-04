@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -99,7 +100,7 @@ public class SharedProgressAlignerTest {
             }
         }
 
-        checkRecordingListeners(
+        this.checkGloballyAlignedEvents(
                 Collections.singletonList(new GloballyAlignedEvent(2, false)), listeners);
     }
 
@@ -120,7 +121,7 @@ public class SharedProgressAlignerTest {
             }
         }
 
-        checkRecordingListeners(
+        this.checkGloballyAlignedEvents(
                 Collections.singletonList(new GloballyAlignedEvent(2, true)), listeners);
     }
 
@@ -141,7 +142,7 @@ public class SharedProgressAlignerTest {
             }
         }
 
-        checkRecordingListeners(
+        this.checkGloballyAlignedEvents(
                 Collections.singletonList(new GloballyAlignedEvent(0, false)), listeners);
     }
 
@@ -163,8 +164,39 @@ public class SharedProgressAlignerTest {
             }
         }
 
-        checkRecordingListeners(
+        this.checkGloballyAlignedEvents(
                 Collections.singletonList(new GloballyAlignedEvent(2, true)), listeners);
+    }
+
+    @Test
+    public void testSendEventsBeforeCompleteCheckpoint() {
+        IterationID iterationId = new IterationID();
+        List<OperatorID> operatorIds = Arrays.asList(new OperatorID(), new OperatorID());
+        List<Integer> parallelisms = Arrays.asList(2, 3);
+        List<RecordingListener> listeners =
+                Arrays.asList(new RecordingListener(), new RecordingListener());
+        SharedProgressAligner aligner =
+                initializeAligner(iterationId, operatorIds, parallelisms, listeners);
+
+        List<CompletableFuture<byte[]>> firstCheckpointStateFutures =
+                Arrays.asList(new CompletableFuture<>(), new CompletableFuture<>());
+        for (int i = 0; i < operatorIds.size(); ++i) {
+            // Operator 0 is the criteria stream
+            aligner.requestCheckpoint(1, parallelisms.get(i), firstCheckpointStateFutures.get(i));
+        }
+
+        List<CompletableFuture<byte[]>> secondCheckpointStateFutures =
+                Arrays.asList(new CompletableFuture<>(), new CompletableFuture<>());
+        for (int i = 0; i < operatorIds.size(); ++i) {
+            // Operator 0 is the criteria stream
+            aligner.requestCheckpoint(2, parallelisms.get(i), secondCheckpointStateFutures.get(i));
+        }
+
+        firstCheckpointStateFutures.forEach(future -> assertTrue(future.isDone()));
+        secondCheckpointStateFutures.forEach(future -> assertTrue(future.isDone()));
+        checkCoordinatorCheckpointEvents(
+                Arrays.asList(new CoordinatorCheckpointEvent(1), new CoordinatorCheckpointEvent(2)),
+                listeners);
     }
 
     private SharedProgressAligner initializeAligner(
@@ -187,11 +219,19 @@ public class SharedProgressAlignerTest {
         return aligner;
     }
 
-    private void checkRecordingListeners(
+    private void checkGloballyAlignedEvents(
             List<GloballyAlignedEvent> expectedGloballyAlignedEvents,
             List<RecordingListener> listeners) {
         for (RecordingListener consumer : listeners) {
             assertEquals(expectedGloballyAlignedEvents, consumer.globallyAlignedEvents);
+        }
+    }
+
+    private void checkCoordinatorCheckpointEvents(
+            List<CoordinatorCheckpointEvent> expectedGloballyAlignedEvents,
+            List<RecordingListener> listeners) {
+        for (RecordingListener consumer : listeners) {
+            assertEquals(expectedGloballyAlignedEvents, consumer.checkpointEvents);
         }
     }
 

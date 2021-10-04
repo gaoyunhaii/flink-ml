@@ -20,16 +20,40 @@ package org.apache.flink.ml.iteration.operator.event;
 
 import org.apache.flink.runtime.operators.coordination.OperatorEvent;
 
+import java.util.Objects;
+
 /** Coordinator received the request of checkpoints. */
 public class CoordinatorCheckpointEvent implements OperatorEvent {
 
-    private final int checkpointId;
+    private final long checkpointId;
 
-    public CoordinatorCheckpointEvent(int checkpointId) {
+    public CoordinatorCheckpointEvent(long checkpointId) {
         this.checkpointId = checkpointId;
     }
 
-    public int getCheckpointId() {
+    public long getCheckpointId() {
         return checkpointId;
+    }
+
+    @Override
+    public String toString() {
+        return "CoordinatorCheckpointEvent{" + "checkpointId=" + checkpointId + '}';
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof CoordinatorCheckpointEvent)) {
+            return false;
+        }
+        CoordinatorCheckpointEvent that = (CoordinatorCheckpointEvent) o;
+        return checkpointId == that.checkpointId;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(checkpointId);
     }
 }

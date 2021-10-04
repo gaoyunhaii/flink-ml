@@ -92,7 +92,8 @@ public class HeadOperatorCoordinator implements OperatorCoordinator, SharedProgr
 
     @Override
     public void checkpointCoordinator(long l, CompletableFuture<byte[]> completableFuture) {
-        completableFuture.complete(new byte[0]);
+        sharedProgressAligner.requestCheckpoint(
+                l, context.currentParallelism(), completableFuture);
     }
 
     @Override
