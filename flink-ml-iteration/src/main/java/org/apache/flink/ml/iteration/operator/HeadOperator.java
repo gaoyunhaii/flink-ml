@@ -186,12 +186,16 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         Optional<HeadState> lastHeadState =
                 OperatorStateUtils.getUniqueElement(headState, "headState");
         if (lastHeadState.isPresent()) {
-            numFeedbackRecordsPerRound.putAll(lastHeadState.get().numFeedbackRecordsEachRound);
-            latestRoundAligned = lastHeadState.get().getLatestRoundAligned();
-            latestRoundGloballyAligned = lastHeadState.get().getLatestRoundGloballyAligned();
+            if (lastHeadState.get().isTerminating()) {
+                status = HeadOperatorStatus.TERMINATED;
+            } else {
+                numFeedbackRecordsPerRound.putAll(lastHeadState.get().numFeedbackRecordsEachRound);
+                latestRoundAligned = lastHeadState.get().getLatestRoundAligned();
+                latestRoundGloballyAligned = lastHeadState.get().getLatestRoundGloballyAligned();
 
-            for (int i = latestRoundGloballyAligned + 1; i <= latestRoundAligned; ++i) {
-                sendEpochWatermarkToCoordinator(i);
+                for (int i = latestRoundGloballyAligned + 1; i <= latestRoundAligned; ++i) {
+                    sendEpochWatermarkToCoordinator(i);
+                }
             }
         }
 
@@ -261,14 +265,31 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
                     Collections.singletonList(getRuntimeContext().getNumberOfParallelSubtasks()));
         }
 
-        headState.clear();
-        headState.update(
-                Collections.singletonList(
-                        new HeadState(
-                                new HashMap<>(numFeedbackRecordsPerRound),
-                                latestRoundAligned,
-                                latestRoundGloballyAligned)));
-        checkpoints.startLogging(context.getCheckpointId(), context.getRawOperatorStateOutput());
+        if (status == HeadOperatorStatus.TERMINATING || status == HeadOperatorStatus.TERMINATED) {
+            // in this case we do not need to wait for the feedback edges.
+            // After failover, we need to do nothing, since we have notified
+            // all the operators obout the termination. In this case, we only need to know we
+            // are terminating.
+            headState.clear();
+            headState.update(
+                    Collections.singletonList(
+                            new HeadState(
+                                    true,
+                                    Collections.emptyMap(),
+                                    Integer.MAX_VALUE,
+                                    Integer.MAX_VALUE)));
+        } else {
+            headState.clear();
+            headState.update(
+                    Collections.singletonList(
+                            new HeadState(
+                                    false,
+                                    new HashMap<>(numFeedbackRecordsPerRound),
+                                    latestRoundAligned,
+                                    latestRoundGloballyAligned)));
+            checkpoints.startLogging(
+                    context.getCheckpointId(), context.getRawOperatorStateOutput());
+        }
 
         CheckpointAlignmentStatus checkpointAlignmentStatus =
                 checkpointAlignmmentStatuses.remove(context.getCheckpointId());
@@ -329,7 +350,6 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         }
     }
 
-    @Override
     @SuppressWarnings({"unchecked", "rawtypes"})
     public void handleOperatorEvent(OperatorEvent operatorEvent) {
         if (operatorEvent instanceof GloballyAlignedEvent) {
@@ -390,9 +410,18 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
 
     @Override
     public void endInput() throws Exception {
-        sendEpochWatermarkToCoordinator(0);
-        while (status != HeadOperatorStatus.TERMINATED) {
-            mailboxExecutor.yield();
+        if (status != HeadOperatorStatus.TERMINATED) {
+            sendEpochWatermarkToCoordinator(0);
+            while (status != HeadOperatorStatus.TERMINATED) {
+                mailboxExecutor.yield();
+            }
+        }
+    }
+
+    @Override
+    public void close() throws Exception {
+        if (checkpoints != null) {
+            checkpoints.close();
         }
     }
 
@@ -472,6 +501,8 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
 
     private static class HeadState {
 
+        private boolean terminating;
+
         private Map<Integer, Long> numFeedbackRecordsEachRound;
 
         private int latestRoundAligned;
@@ -481,12 +512,22 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         public HeadState() {}
 
         public HeadState(
+                boolean terminating,
                 Map<Integer, Long> numFeedbackRecordsEachRound,
                 int latestRoundAligned,
                 int latestRoundGloballyAligned) {
+            this.terminating = terminating;
             this.numFeedbackRecordsEachRound = numFeedbackRecordsEachRound;
             this.latestRoundAligned = latestRoundAligned;
             this.latestRoundGloballyAligned = latestRoundGloballyAligned;
+        }
+
+        public boolean isTerminating() {
+            return terminating;
+        }
+
+        public void setTerminating(boolean terminating) {
+            this.terminating = terminating;
         }
 
         public Map<Integer, Long> getNumFeedbackRecordsEachRound() {

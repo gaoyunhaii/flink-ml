@@ -493,6 +493,115 @@ public class HeadOperatorTest {
                 });
     }
 
+    @Test
+    public void testCheckpointBeforeTerminated() throws Exception {
+        IterationID iterationId = new IterationID();
+        OperatorID operatorId = new OperatorID();
+
+        TaskStateSnapshot taskStateSnapshot =
+                createHarnessAndRun(
+                        iterationId,
+                        operatorId,
+                        null,
+                        harness -> {
+                            harness.getTaskStateManager().getWaitForReportLatch().reset();
+                            putFeedbackRecords(
+                                    iterationId, 0, IterationRecord.newEpochWatermark(5, "tail"));
+                            dispatchOperatorEvent(
+                                    harness, operatorId, new CoordinatorCheckpointEvent(2));
+                            harness.getStreamTask()
+                                    .triggerCheckpointAsync(
+                                            new CheckpointMetaData(2, 1000),
+                                            CheckpointOptions.alignedNoTimeout(
+                                                    CheckpointType.CHECKPOINT,
+                                                    CheckpointStorageLocationReference
+                                                            .getDefault()));
+                            harness.processAll();
+
+                            dispatchOperatorEvent(
+                                    harness, operatorId, new GloballyAlignedEvent(5, true));
+                            harness.processAll();
+                            putFeedbackRecords(iterationId, 0, IterationRecord.newBarrier(2));
+                            harness.processAll();
+                            System.out.println(harness.getOutput());
+
+                            harness.getTaskStateManager().getWaitForReportLatch().await();
+                            return harness.getTaskStateManager()
+                                    .getLastJobManagerTaskStateSnapshot();
+                        });
+        assertNotNull(taskStateSnapshot);
+        System.out.println(taskStateSnapshot);
+        cleanupFeedbackChannel(iterationId, 0);
+        createHarnessAndRun(
+                iterationId,
+                operatorId,
+                taskStateSnapshot,
+                harness -> {
+                    System.out.println(harness.getOutput());
+                    RecordingOperatorEventGateway eventGateway =
+                            (RecordingOperatorEventGateway)
+                                    RecordingHeadOperatorFactory.latestHeadOperator
+                                            .getOperatorEventGateway();
+                    System.out.println(eventGateway.operatorEvents);
+                    return null;
+                });
+    }
+
+    @Test
+    public void testCheckpointAfterTerminated() throws Exception {
+        IterationID iterationId = new IterationID();
+        OperatorID operatorId = new OperatorID();
+
+        TaskStateSnapshot taskStateSnapshot =
+                createHarnessAndRun(
+                        iterationId,
+                        operatorId,
+                        null,
+                        harness -> {
+                            harness.getTaskStateManager().getWaitForReportLatch().reset();
+                            putFeedbackRecords(
+                                    iterationId, 0, IterationRecord.newEpochWatermark(5, "tail"));
+                            dispatchOperatorEvent(
+                                    harness, operatorId, new GloballyAlignedEvent(5, true));
+                            harness.processAll();
+
+                            dispatchOperatorEvent(
+                                    harness, operatorId, new CoordinatorCheckpointEvent(2));
+                            harness.getStreamTask()
+                                    .triggerCheckpointAsync(
+                                            new CheckpointMetaData(2, 1000),
+                                            CheckpointOptions.alignedNoTimeout(
+                                                    CheckpointType.CHECKPOINT,
+                                                    CheckpointStorageLocationReference
+                                                            .getDefault()));
+                            harness.processAll();
+                            System.out.println(harness.getOutput());
+
+                            harness.getTaskStateManager().getWaitForReportLatch().await();
+                            return harness.getTaskStateManager()
+                                    .getLastJobManagerTaskStateSnapshot();
+                        });
+        assertNotNull(taskStateSnapshot);
+        System.out.println(taskStateSnapshot);
+        cleanupFeedbackChannel(iterationId, 0);
+        createHarnessAndRun(
+                iterationId,
+                operatorId,
+                taskStateSnapshot,
+                harness -> {
+                    harness.processEvent(EndOfData.INSTANCE);
+                    harness.finishProcessing();
+
+                    System.out.println(harness.getOutput());
+                    RecordingOperatorEventGateway eventGateway =
+                            (RecordingOperatorEventGateway)
+                                    RecordingHeadOperatorFactory.latestHeadOperator
+                                            .getOperatorEventGateway();
+                    System.out.println(eventGateway.operatorEvents);
+                    return null;
+                });
+    }
+
     private static void assertNextOperatorEvent(
             OperatorEvent expectedEvent, RecordingOperatorEventGateway eventGateway)
             throws InterruptedException {
