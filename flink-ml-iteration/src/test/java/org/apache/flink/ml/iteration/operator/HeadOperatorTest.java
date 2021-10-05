@@ -26,8 +26,10 @@ import org.apache.flink.ml.iteration.operator.event.CoordinatorCheckpointEvent;
 import org.apache.flink.ml.iteration.operator.event.GloballyAlignedEvent;
 import org.apache.flink.ml.iteration.operator.event.SubtaskAlignedEvent;
 import org.apache.flink.ml.iteration.typeinfo.IterationRecordTypeInfo;
+import org.apache.flink.runtime.checkpoint.CheckpointMetaData;
 import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.checkpoint.CheckpointType;
+import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
 import org.apache.flink.runtime.io.network.api.CheckpointBarrier;
 import org.apache.flink.runtime.io.network.api.EndOfData;
 import org.apache.flink.runtime.jobgraph.OperatorID;
@@ -43,7 +45,9 @@ import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.OneInputStreamTask;
 import org.apache.flink.streaming.runtime.tasks.StreamTaskMailboxTestHarness;
 import org.apache.flink.streaming.runtime.tasks.StreamTaskMailboxTestHarnessBuilder;
+import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.SerializedValue;
+import org.apache.flink.util.function.FunctionWithException;
 
 import org.junit.Rule;
 import org.junit.Test;
@@ -51,6 +55,9 @@ import org.junit.rules.TemporaryFolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
+import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -299,9 +306,182 @@ public class HeadOperatorTest {
         }
     }
 
+    @Test(timeout = 60000)
+    public void testPostponeGloballyAlignedEventsAfterSnapshotted() throws Exception {
+        IterationID iterationId = new IterationID();
+        try (StreamTaskMailboxTestHarness<IterationRecord<Integer>> harness =
+                new StreamTaskMailboxTestHarnessBuilder<>(
+                                OneInputStreamTask::new,
+                                new IterationRecordTypeInfo<>(BasicTypeInfo.INT_TYPE_INFO))
+                        .addInput(new IterationRecordTypeInfo<>(BasicTypeInfo.INT_TYPE_INFO))
+                        .setupOutputForSingletonOperatorChain(
+                                new RecordingHeadOperatorFactory(
+                                        iterationId,
+                                        0,
+                                        false,
+                                        5,
+                                        RecordingOperatorEventGateway::new))
+                        .buildUnrestored()) {
+            harness.getStreamTask()
+                    .getEnvironment()
+                    .getTaskManagerInfo()
+                    .getConfiguration()
+                    .set(
+                            IterationOptions.DATA_CACHE_PATH,
+                            "file://" + tempFolder.newFolder().getAbsolutePath());
+            harness.getStreamTask().restore();
+
+            OperatorID operatorId = RecordingHeadOperatorFactory.latestHeadOperator.getOperatorID();
+            harness.getStreamTask()
+                    .dispatchOperatorEvent(
+                            operatorId, new SerializedValue<>(new CoordinatorCheckpointEvent(5)));
+            harness.getStreamTask()
+                    .dispatchOperatorEvent(
+                            operatorId, new SerializedValue<>(new GloballyAlignedEvent(5, false)));
+            CheckpointBarrier barrier =
+                    new CheckpointBarrier(
+                            5,
+                            5000,
+                            CheckpointOptions.alignedNoTimeout(
+                                    CheckpointType.CHECKPOINT,
+                                    CheckpointStorageLocationReference.getDefault()));
+            harness.processEvent(barrier);
+            harness.processAll();
+
+            assertEquals(
+                    Arrays.asList(
+                            barrier,
+                            new StreamRecord<>(
+                                    IterationRecord.newEpochWatermark(
+                                            5, OperatorUtils.getUniqueSenderId(operatorId, 0)),
+                                    0)),
+                    new ArrayList<>(harness.getOutput()));
+        }
+    }
+
     @Test
-    public void testPostponeGloballyAlignedEventsAfterSnapshotted() {
-        
+    public void testSnapshotAndRestore1() throws Exception {
+        IterationID iterationId = new IterationID();
+        OperatorID operatorId = new OperatorID();
+
+        TaskStateSnapshot taskStateSnapshot =
+                createHarnessAndRun(
+                        iterationId,
+                        operatorId,
+                        null,
+                        harness -> {
+                            harness.getTaskStateManager().getWaitForReportLatch().reset();
+                            putFeedbackRecords(
+                                    iterationId, 0, IterationRecord.newEpochWatermark(5, "tail"));
+                            dispatchOperatorEvent(
+                                    harness, operatorId, new GloballyAlignedEvent(5, false));
+                            dispatchOperatorEvent(
+                                    harness, operatorId, new CoordinatorCheckpointEvent(2));
+                            harness.getStreamTask()
+                                    .triggerCheckpointAsync(
+                                            new CheckpointMetaData(2, 1000),
+                                            CheckpointOptions.alignedNoTimeout(
+                                                    CheckpointType.CHECKPOINT,
+                                                    CheckpointStorageLocationReference
+                                                            .getDefault()));
+                            harness.processAll();
+
+                            putFeedbackRecords(iterationId, 0, IterationRecord.newRecord(10, 6));
+                            putFeedbackRecords(iterationId, 0, IterationRecord.newRecord(11, 6));
+                            putFeedbackRecords(
+                                    iterationId, 0, IterationRecord.newEpochWatermark(6, "tail"));
+                            putFeedbackRecords(iterationId, 0, IterationRecord.newBarrier(2));
+                            harness.processAll();
+                            System.out.println(harness.getOutput());
+
+                            harness.getTaskStateManager().getWaitForReportLatch().await();
+                            return harness.getTaskStateManager()
+                                    .getLastJobManagerTaskStateSnapshot();
+                        });
+        assertNotNull(taskStateSnapshot);
+        System.out.println(taskStateSnapshot);
+        cleanupFeedbackChannel(iterationId, 0);
+        createHarnessAndRun(
+                iterationId,
+                operatorId,
+                taskStateSnapshot,
+                harness -> {
+                    System.out.println(harness.getOutput());
+                    RecordingOperatorEventGateway eventGateway =
+                            (RecordingOperatorEventGateway)
+                                    RecordingHeadOperatorFactory.latestHeadOperator
+                                            .getOperatorEventGateway();
+                    System.out.println(eventGateway.operatorEvents);
+                    System.out.println(
+                            RecordingHeadOperatorFactory.latestHeadOperator
+                                    .getNumFeedbackRecordsPerRound());
+                    System.out.println(
+                            RecordingHeadOperatorFactory.latestHeadOperator
+                                    .getLatestRoundAligned());
+                    System.out.println(
+                            RecordingHeadOperatorFactory.latestHeadOperator
+                                    .getLatestRoundGloballyAligned());
+                    return null;
+                });
+    }
+
+    @Test
+    public void testSnapshotAndRestore2() throws Exception {
+        IterationID iterationId = new IterationID();
+        OperatorID operatorId = new OperatorID();
+
+        TaskStateSnapshot taskStateSnapshot =
+                createHarnessAndRun(
+                        iterationId,
+                        operatorId,
+                        null,
+                        harness -> {
+                            harness.getTaskStateManager().getWaitForReportLatch().reset();
+                            putFeedbackRecords(
+                                    iterationId, 0, IterationRecord.newEpochWatermark(5, "tail"));
+                            dispatchOperatorEvent(
+                                    harness, operatorId, new GloballyAlignedEvent(5, false));
+                            harness.processAll();
+
+                            putFeedbackRecords(iterationId, 0, IterationRecord.newRecord(10, 6));
+                            putFeedbackRecords(iterationId, 0, IterationRecord.newRecord(11, 6));
+                            putFeedbackRecords(
+                                    iterationId, 0, IterationRecord.newEpochWatermark(6, "tail"));
+                            dispatchOperatorEvent(
+                                    harness, operatorId, new CoordinatorCheckpointEvent(2));
+                            harness.getStreamTask()
+                                    .triggerCheckpointAsync(
+                                            new CheckpointMetaData(2, 1000),
+                                            CheckpointOptions.alignedNoTimeout(
+                                                    CheckpointType.CHECKPOINT,
+                                                    CheckpointStorageLocationReference
+                                                            .getDefault()));
+                            harness.processAll();
+
+                            putFeedbackRecords(iterationId, 0, IterationRecord.newBarrier(2));
+                            harness.processAll();
+                            System.out.println(harness.getOutput());
+
+                            harness.getTaskStateManager().getWaitForReportLatch().await();
+                            return harness.getTaskStateManager()
+                                    .getLastJobManagerTaskStateSnapshot();
+                        });
+        assertNotNull(taskStateSnapshot);
+        System.out.println(taskStateSnapshot);
+        cleanupFeedbackChannel(iterationId, 0);
+        createHarnessAndRun(
+                iterationId,
+                operatorId,
+                taskStateSnapshot,
+                harness -> {
+                    System.out.println(harness.getOutput());
+                    RecordingOperatorEventGateway eventGateway =
+                            (RecordingOperatorEventGateway)
+                                    RecordingHeadOperatorFactory.latestHeadOperator
+                                            .getOperatorEventGateway();
+                    System.out.println(eventGateway.operatorEvents);
+                    return null;
+                });
     }
 
     private static void assertNextOperatorEvent(
@@ -321,6 +501,73 @@ public class HeadOperatorTest {
                                                 iterationId, feedbackIndex)
                                         .withSubTaskIndex(0, 0));
         feedbackChannel.put(record);
+    }
+
+    private static void putFeedbackRecords(
+            IterationID iterationId, int feedbackIndex, IterationRecord<?> record) {
+        FeedbackChannel<StreamRecord<IterationRecord<?>>> feedbackChannel =
+                FeedbackChannelBroker.get()
+                        .getChannel(
+                                OperatorUtils.<StreamRecord<IterationRecord<?>>>createFeedbackKey(
+                                                iterationId, feedbackIndex)
+                                        .withSubTaskIndex(0, 0));
+        feedbackChannel.put(new StreamRecord<>(record));
+    }
+
+    private static void cleanupFeedbackChannel(IterationID iterationId, int feedbackIndex) {
+        FeedbackChannel<StreamRecord<IterationRecord<?>>> feedbackChannel =
+                FeedbackChannelBroker.get()
+                        .getChannel(
+                                OperatorUtils.<StreamRecord<IterationRecord<?>>>createFeedbackKey(
+                                                iterationId, feedbackIndex)
+                                        .withSubTaskIndex(0, 0));
+        feedbackChannel.close();
+    }
+
+    private static void dispatchOperatorEvent(
+            StreamTaskMailboxTestHarness<?> harness,
+            OperatorID operatorId,
+            OperatorEvent operatorEvent)
+            throws IOException, FlinkException {
+        harness.getStreamTask()
+                .dispatchOperatorEvent(operatorId, new SerializedValue<>(operatorEvent));
+    }
+
+    private <T> T createHarnessAndRun(
+            IterationID iterationId,
+            OperatorID operatorId,
+            @Nullable TaskStateSnapshot snapshot,
+            FunctionWithException<
+                            StreamTaskMailboxTestHarness<IterationRecord<Integer>>, T, Exception>
+                    runnable)
+            throws Exception {
+        try (StreamTaskMailboxTestHarness<IterationRecord<Integer>> harness =
+                new StreamTaskMailboxTestHarnessBuilder<>(
+                                OneInputStreamTask::new,
+                                new IterationRecordTypeInfo<>(BasicTypeInfo.INT_TYPE_INFO))
+                        .addInput(new IterationRecordTypeInfo<>(BasicTypeInfo.INT_TYPE_INFO))
+                        .setTaskStateSnapshot(
+                                1, snapshot == null ? new TaskStateSnapshot() : snapshot)
+                        .setupOutputForSingletonOperatorChain(
+                                new RecordingHeadOperatorFactory(
+                                        iterationId,
+                                        0,
+                                        false,
+                                        5,
+                                        RecordingOperatorEventGateway::new),
+                                operatorId)
+                        .buildUnrestored()) {
+            harness.getStreamTask()
+                    .getEnvironment()
+                    .getTaskManagerInfo()
+                    .getConfiguration()
+                    .set(
+                            IterationOptions.DATA_CACHE_PATH,
+                            "file://" + tempFolder.newFolder().getAbsolutePath());
+            harness.getStreamTask().restore();
+
+            return runnable.apply(harness);
+        }
     }
 
     private static class RecordingOperatorEventGateway implements OperatorEventGateway {

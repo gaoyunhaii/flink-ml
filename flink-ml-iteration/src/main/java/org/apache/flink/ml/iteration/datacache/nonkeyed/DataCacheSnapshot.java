@@ -98,7 +98,7 @@ public class DataCacheSnapshot {
             } else {
                 // We have to copy the whole streams.
                 int totalRecords = segments.stream().mapToInt(Segment::getCount).sum();
-                checkState(totalRecords > 0, "overflowed: " + totalRecords);
+                checkState(totalRecords >= 0, "overflowed: " + totalRecords);
                 dos.writeInt(totalRecords);
 
                 for (Segment segment : segments) {

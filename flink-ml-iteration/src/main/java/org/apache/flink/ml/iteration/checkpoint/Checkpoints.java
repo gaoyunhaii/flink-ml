@@ -24,6 +24,7 @@ import org.apache.flink.core.fs.Path;
 import org.apache.flink.ml.iteration.datacache.nonkeyed.DataCacheSnapshot;
 import org.apache.flink.ml.iteration.datacache.nonkeyed.DataCacheWriter;
 import org.apache.flink.runtime.state.OperatorStateCheckpointOutputStream;
+import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.ResourceGuard;
 import org.apache.flink.util.function.SupplierWithException;
 
@@ -88,6 +89,7 @@ public class Checkpoints<T> implements AutoCloseable {
                                 pendingCheckpoint.dataCacheWriter.cleanup();
                             } catch (Exception e) {
                                 LOG.error("Failed to commit checkpoint until " + checkpointId, e);
+                                throw new FlinkRuntimeException(e);
                             } finally {
                                 pendingCheckpoint.snapshotLease.close();
                             }

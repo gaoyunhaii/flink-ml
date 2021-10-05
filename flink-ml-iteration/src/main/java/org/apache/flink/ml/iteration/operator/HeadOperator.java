@@ -25,8 +25,6 @@ import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.base.IntSerializer;
-import org.apache.flink.api.common.typeutils.base.LongSerializer;
-import org.apache.flink.api.common.typeutils.base.MapSerializer;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.ml.iteration.IterationID;
@@ -66,10 +64,10 @@ import org.apache.flink.util.OutputTag;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.Executor;
@@ -101,7 +99,11 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
 
     // ------------- runtime -------------------
 
-    private final Map<Integer, Long> numFeedbackRecordsPerRound;
+    private transient Map<Integer, Long> numFeedbackRecordsPerRound;
+
+    private transient int latestRoundAligned;
+
+    private transient int latestRoundGloballyAligned;
 
     private transient BroadcastOutput<?> eventBroadcastOutput;
 
@@ -111,15 +113,15 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
 
     // ------------- checkpoints -------------------
 
-    private final TreeMap<Long, CheckpointAlignmentStatus> checkpointAlignmmentStatuses;
+    private transient TreeMap<Long, CheckpointAlignmentStatus> checkpointAlignmmentStatuses;
 
-    private long latestCheckpointFromCoordinator;
+    private transient long latestCheckpointFromCoordinator;
 
     private transient Checkpoints<IterationRecord<?>> checkpoints;
 
     private transient ListState<Integer> parallelismState;
 
-    private transient ListState<Map<Integer, Long>> numFeedbackRecordsState;
+    private transient ListState<HeadState> headState;
 
     public HeadOperator(
             IterationID iterationId,
@@ -133,9 +135,6 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         this.isCriteriaStream = isCriteriaStream;
         this.mailboxExecutor = Objects.requireNonNull(mailboxExecutor);
         this.operatorEventGateway = Objects.requireNonNull(operatorEventGateway);
-        this.numFeedbackRecordsPerRound = new HashMap<>();
-
-        this.checkpointAlignmmentStatuses = new TreeMap<>();
 
         // Even though this operator does not use the processing
         // time service, AbstractStreamOperator requires this
@@ -158,38 +157,41 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     public void initializeState(StateInitializationContext context) throws Exception {
         super.initializeState(context);
         reusable = new StreamRecord<>(null);
+        this.numFeedbackRecordsPerRound = new HashMap<>();
+        this.checkpointAlignmmentStatuses = new TreeMap<>();
+
+        this.latestRoundAligned = -1;
+        this.latestRoundGloballyAligned = -1;
 
         parallelismState =
                 context.getOperatorStateStore()
                         .getUnionListState(
                                 new ListStateDescriptor<>("parallelism", IntSerializer.INSTANCE));
-        List<Integer> parallelismStateElements = new ArrayList<>();
-        parallelismState.get().forEach(parallelismStateElements::add);
-        checkState(
-                parallelismStateElements.size() <= 1,
-                "There should be at most one parallelism state element");
-        if (parallelismStateElements.size() > 0
-                && parallelismStateElements.get(0)
-                        != getRuntimeContext().getNumberOfParallelSubtasks()) {
+        Optional<Integer> lastParallelism =
+                OperatorStateUtils.getUniqueElement(parallelismState, "parallelism");
+        if (lastParallelism.isPresent()
+                && lastParallelism.get() != getRuntimeContext().getNumberOfParallelSubtasks()) {
             throw new FlinkRuntimeException(
                     String.format(
                             "The Head operator is recovered from a state with parallelism %d, "
                                     + "but the current parallelism is %d, which is not supported",
-                            parallelismStateElements.get(0),
+                            lastParallelism.get(),
                             getRuntimeContext().getNumberOfParallelSubtasks()));
         }
 
-        numFeedbackRecordsState =
+        headState =
                 context.getOperatorStateStore()
-                        .getListState(
-                                new ListStateDescriptor<>(
-                                        "numFeedbacks",
-                                        new MapSerializer<>(
-                                                IntSerializer.INSTANCE, LongSerializer.INSTANCE)));
-        Iterator<Map<Integer, Long>> numFeedbackRecordsStateIterator =
-                numFeedbackRecordsState.get().iterator();
-        if (numFeedbackRecordsStateIterator.hasNext()) {
-            numFeedbackRecordsPerRound.putAll(numFeedbackRecordsStateIterator.next());
+                        .getListState(new ListStateDescriptor<>("headState", HeadState.class));
+        Optional<HeadState> lastHeadState =
+                OperatorStateUtils.getUniqueElement(headState, "headState");
+        if (lastHeadState.isPresent()) {
+            numFeedbackRecordsPerRound.putAll(lastHeadState.get().numFeedbackRecordsEachRound);
+            latestRoundAligned = lastHeadState.get().getLatestRoundAligned();
+            latestRoundGloballyAligned = lastHeadState.get().getLatestRoundGloballyAligned();
+
+            for (int i = latestRoundGloballyAligned + 1; i <= latestRoundAligned; ++i) {
+                sendEpochWatermarkToCoordinator(i);
+            }
         }
 
         Path basePath =
@@ -236,6 +238,7 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         while (!checkpointAlignmentStatus.notifiedFromCoordinator) {
             mailboxExecutor.yield();
         }
+        checkpointAlignmentStatus.notifiedFromChannels = true;
     }
 
     @Override
@@ -247,8 +250,14 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
             parallelismState.update(
                     Collections.singletonList(getRuntimeContext().getNumberOfParallelSubtasks()));
         }
-        numFeedbackRecordsState.clear();
-        numFeedbackRecordsState.update(Collections.singletonList(numFeedbackRecordsPerRound));
+
+        headState.clear();
+        headState.update(
+                Collections.singletonList(
+                        new HeadState(
+                                new HashMap<>(numFeedbackRecordsPerRound),
+                                latestRoundAligned,
+                                latestRoundGloballyAligned)));
         checkpoints.startLogging(context.getCheckpointId(), context.getRawOperatorStateOutput());
 
         CheckpointAlignmentStatus checkpointAlignmentStatus =
@@ -295,6 +304,8 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
                 break;
             case EPOCH_WATERMARK:
                 LOG.info("Head Received epoch watermark {}", iterationRecord.getValue().getRound());
+                checkState(iterationRecord.getValue().getRound() > latestRoundAligned);
+                latestRoundAligned = iterationRecord.getValue().getRound();
                 sendEpochWatermarkToCoordinator(iterationRecord.getValue().getRound());
                 break;
         }
@@ -317,6 +328,9 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
                 checkpointAlignmentStatus.pendingGlobalEvents.add(globallyAlignedEvent);
             } else {
                 try {
+                    checkState(globallyAlignedEvent.getRound() > latestRoundGloballyAligned);
+                    latestRoundGloballyAligned = globallyAlignedEvent.getRound();
+
                     shouldTerminate = globallyAlignedEvent.isTerminated();
                     reusable.replace(
                             IterationRecord.newEpochWatermark(
@@ -381,6 +395,16 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     }
 
     @VisibleForTesting
+    public int getLatestRoundAligned() {
+        return latestRoundAligned;
+    }
+
+    @VisibleForTesting
+    public int getLatestRoundGloballyAligned() {
+        return latestRoundGloballyAligned;
+    }
+
+    @VisibleForTesting
     public OperatorEventGateway getOperatorEventGateway() {
         return operatorEventGateway;
     }
@@ -404,6 +428,50 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
 
             this.notifiedFromChannels = notifiedFromChannels;
             this.notifiedFromCoordinator = notifiedFromCoordinator;
+        }
+    }
+
+    private static class HeadState {
+
+        private Map<Integer, Long> numFeedbackRecordsEachRound;
+
+        private int latestRoundAligned;
+
+        private int latestRoundGloballyAligned;
+
+        public HeadState() {}
+
+        public HeadState(
+                Map<Integer, Long> numFeedbackRecordsEachRound,
+                int latestRoundAligned,
+                int latestRoundGloballyAligned) {
+            this.numFeedbackRecordsEachRound = numFeedbackRecordsEachRound;
+            this.latestRoundAligned = latestRoundAligned;
+            this.latestRoundGloballyAligned = latestRoundGloballyAligned;
+        }
+
+        public Map<Integer, Long> getNumFeedbackRecordsEachRound() {
+            return numFeedbackRecordsEachRound;
+        }
+
+        public void setNumFeedbackRecordsEachRound(Map<Integer, Long> numFeedbackRecordsEachRound) {
+            this.numFeedbackRecordsEachRound = numFeedbackRecordsEachRound;
+        }
+
+        public int getLatestRoundAligned() {
+            return latestRoundAligned;
+        }
+
+        public void setLatestRoundAligned(int latestRoundAligned) {
+            this.latestRoundAligned = latestRoundAligned;
+        }
+
+        public int getLatestRoundGloballyAligned() {
+            return latestRoundGloballyAligned;
+        }
+
+        public void setLatestRoundGloballyAligned(int latestRoundGloballyAligned) {
+            this.latestRoundGloballyAligned = latestRoundGloballyAligned;
         }
     }
 }
