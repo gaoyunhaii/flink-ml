@@ -109,7 +109,7 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
 
     private transient StreamRecord<IterationRecord<?>> reusable;
 
-    private transient boolean shouldTerminate;
+    private transient HeadOperatorStatus status;
 
     // ------------- checkpoints -------------------
 
@@ -151,6 +151,7 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         eventBroadcastOutput =
                 BroadcastOutputFactory.createBroadcastOutput(
                         output, metrics.getIOMetricGroup().getNumRecordsOutCounter());
+        status = HeadOperatorStatus.RUNNING;
     }
 
     @Override
@@ -194,13 +195,22 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
             }
         }
 
-        Path basePath =
-                new Path(
-                        getContainingTask()
-                                .getEnvironment()
-                                .getTaskManagerInfo()
-                                .getConfiguration()
-                                .get(IterationOptions.DATA_CACHE_PATH));
+        String basePathConfig =
+                getContainingTask()
+                        .getEnvironment()
+                        .getTaskManagerInfo()
+                        .getConfiguration()
+                        .get(IterationOptions.DATA_CACHE_PATH);
+        if (basePathConfig == null) {
+            basePathConfig =
+                    getContainingTask()
+                            .getEnvironment()
+                            .getIOManager()
+                            .getSpillingDirectoriesPaths()[0];
+        }
+
+        Path basePath = new Path(basePathConfig);
+
         FileSystem fileSystem = basePath.getFileSystem();
         TypeSerializer<IterationRecord<?>> typeSerializer =
                 config.getTypeSerializerOut(getClass().getClassLoader());
@@ -221,7 +231,7 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         // Here we register a record
         registerFeedbackConsumer(
                 (Runnable runnable) -> {
-                    if (!shouldTerminate) {
+                    if (status != HeadOperatorStatus.TERMINATED) {
                         mailboxExecutor.execute(runnable::run, "Head feedback");
                     }
                 });
@@ -281,14 +291,22 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     public void processFeedback(StreamRecord<IterationRecord<?>> iterationRecord) throws Exception {
         switch (iterationRecord.getValue().getType()) {
             case RECORD:
-                numFeedbackRecordsPerRound.compute(
-                        iterationRecord.getValue().getRound(),
-                        (round, count) -> count == null ? 1 : count + 1);
-                processRecord(iterationRecord);
-                checkpoints.append(iterationRecord.getValue());
+                if (status != HeadOperatorStatus.TERMINATING) {
+                    numFeedbackRecordsPerRound.compute(
+                            iterationRecord.getValue().getRound(),
+                            (round, count) -> count == null ? 1 : count + 1);
+                    processRecord(iterationRecord);
+                    checkpoints.append(iterationRecord.getValue());
+                }
                 break;
             case EPOCH_WATERMARK:
-                processRecord(iterationRecord);
+                if (status == HeadOperatorStatus.TERMINATING) {
+                    // Overflow due to +1
+                    checkState(iterationRecord.getValue().getRound() == Integer.MIN_VALUE);
+                    status = HeadOperatorStatus.TERMINATED;
+                } else {
+                    processRecord(iterationRecord);
+                }
                 break;
             case BARRIER:
                 checkpoints.commitCheckpointsUntil(iterationRecord.getValue().getCheckpointId());
@@ -331,16 +349,25 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
                     checkState(globallyAlignedEvent.getRound() > latestRoundGloballyAligned);
                     latestRoundGloballyAligned = globallyAlignedEvent.getRound();
 
-                    shouldTerminate = globallyAlignedEvent.isTerminated();
-                    reusable.replace(
-                            IterationRecord.newEpochWatermark(
-                                    globallyAlignedEvent.isTerminated()
-                                            ? Integer.MAX_VALUE
-                                            : globallyAlignedEvent.getRound(),
-                                    OperatorUtils.getUniqueSenderId(
-                                            getOperatorID(),
-                                            getRuntimeContext().getIndexOfThisSubtask())),
-                            0);
+                    if (globallyAlignedEvent.isTerminated()) {
+                        status = HeadOperatorStatus.TERMINATING;
+                        reusable.replace(
+                                IterationRecord.newEpochWatermark(
+                                        Integer.MAX_VALUE,
+                                        OperatorUtils.getUniqueSenderId(
+                                                getOperatorID(),
+                                                getRuntimeContext().getIndexOfThisSubtask())),
+                                0);
+                    } else {
+                        reusable.replace(
+                                IterationRecord.newEpochWatermark(
+                                        globallyAlignedEvent.getRound(),
+                                        OperatorUtils.getUniqueSenderId(
+                                                getOperatorID(),
+                                                getRuntimeContext().getIndexOfThisSubtask())),
+                                0);
+                    }
+
                     eventBroadcastOutput.broadcastEmit((StreamRecord) reusable);
 
                     // Also notify the listener
@@ -364,7 +391,7 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     @Override
     public void endInput() throws Exception {
         sendEpochWatermarkToCoordinator(0);
-        while (!shouldTerminate) {
+        while (status != HeadOperatorStatus.TERMINATED) {
             mailboxExecutor.yield();
         }
     }
@@ -412,6 +439,18 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     @VisibleForTesting
     MailboxExecutor getMailboxExecutor() {
         return mailboxExecutor;
+    }
+
+    public HeadOperatorStatus getStatus() {
+        return status;
+    }
+
+    enum HeadOperatorStatus {
+        RUNNING,
+
+        TERMINATING,
+
+        TERMINATED
     }
 
     private static class CheckpointAlignmentStatus {

@@ -190,6 +190,15 @@ public class HeadOperatorTest {
                                                     new SerializedValue<>(
                                                             new GloballyAlignedEvent(1, true)));
 
+                                    while (RecordingHeadOperatorFactory.latestHeadOperator
+                                                    .getStatus()
+                                            == HeadOperator.HeadOperatorStatus.RUNNING) ;
+                                    putFeedbackRecords(
+                                            iterationId,
+                                            0,
+                                            IterationRecord.newEpochWatermark(
+                                                    Integer.MAX_VALUE + 1, "tail"));
+
                                     return null;
                                 } catch (Throwable e) {
                                     RecordingHeadOperatorFactory.latestHeadOperator
