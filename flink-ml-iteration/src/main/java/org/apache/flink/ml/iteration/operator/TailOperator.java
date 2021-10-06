@@ -18,6 +18,7 @@
 
 package org.apache.flink.ml.iteration.operator;
 
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.ml.iteration.IterationID;
 import org.apache.flink.ml.iteration.IterationRecord;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
@@ -76,8 +77,6 @@ public class TailOperator extends AbstractStreamOperator<Void>
 
     @Override
     public void processElement(StreamRecord<IterationRecord<?>> streamRecord) {
-        System.out.println(
-                getRuntimeContext().getTaskNameWithSubtasks() + " Received " + streamRecord);
         recordConsumer.accept(streamRecord);
     }
 
@@ -89,6 +88,19 @@ public class TailOperator extends AbstractStreamOperator<Void>
                         + checkpointId);
         super.prepareSnapshotPreBarrier(checkpointId);
         channel.put(new StreamRecord<>(IterationRecord.newBarrier(checkpointId)));
+    }
+
+    @Override
+    public void notifyCheckpointAborted(long checkpointId) throws Exception {
+        super.notifyCheckpointAborted(checkpointId);
+
+        // Since head might be blocked, I have to release the guard...
+        HeadOperator.headCheckpoints
+                .get(
+                        new Tuple2<>(
+                                getRuntimeContext().getIndexOfThisSubtask(),
+                                getRuntimeContext().getAttemptNumber()))
+                .cancel(checkpointId);
     }
 
     private void processIfObjectReuseEnabled(StreamRecord<IterationRecord<?>> record) {

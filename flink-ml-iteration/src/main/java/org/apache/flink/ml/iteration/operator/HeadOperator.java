@@ -39,8 +39,20 @@ import org.apache.flink.ml.iteration.operator.event.CoordinatorCheckpointEvent;
 import org.apache.flink.ml.iteration.operator.event.GloballyAlignedEvent;
 import org.apache.flink.ml.iteration.operator.event.SubtaskAlignedEvent;
 import org.apache.flink.ml.iteration.typeinfo.IterationRecordTypeInfo;
-import org.apache.flink.runtime.io.network.partition.consumer.IndexedInputGate;
-import org.apache.flink.runtime.io.network.partition.consumer.SingleInputGate;
+import org.apache.flink.ml.iteration.utils.ReflectionUtils;
+import org.apache.flink.runtime.checkpoint.CheckpointMetaData;
+import org.apache.flink.runtime.event.AbstractEvent;
+import org.apache.flink.runtime.io.network.api.CheckpointBarrier;
+import org.apache.flink.runtime.io.network.api.EndOfPartitionEvent;
+import org.apache.flink.runtime.io.network.api.serialization.EventSerializer;
+import org.apache.flink.runtime.io.network.buffer.Buffer;
+import org.apache.flink.runtime.io.network.buffer.BufferConsumerWithPartialRecordLength;
+import org.apache.flink.runtime.io.network.partition.PipelinedSubpartition;
+import org.apache.flink.runtime.io.network.partition.PipelinedSubpartitionView;
+import org.apache.flink.runtime.io.network.partition.PrioritizedDeque;
+import org.apache.flink.runtime.io.network.partition.consumer.InputChannel;
+import org.apache.flink.runtime.io.network.partition.consumer.LocalInputChannel;
+import org.apache.flink.runtime.io.network.partition.consumer.RemoteInputChannel;
 import org.apache.flink.runtime.operators.coordination.OperatorEvent;
 import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
 import org.apache.flink.runtime.operators.coordination.OperatorEventHandler;
@@ -75,6 +87,7 @@ import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.flink.util.Preconditions.checkState;
 
@@ -90,6 +103,9 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
 
     public static ConcurrentHashMap<Tuple2<Integer, Integer>, StreamTask<?, ?>> headTasks =
             new ConcurrentHashMap<>();
+
+    public static ConcurrentHashMap<Tuple2<Integer, Integer>, Checkpoints<IterationRecord<?>>>
+            headCheckpoints = new ConcurrentHashMap<>();
 
     public static final OutputTag<IterationRecord<Void>> ALIGN_NOTIFY_OUTPUT_TAG =
             new OutputTag<>("aligned", new IterationRecordTypeInfo<>(BasicTypeInfo.VOID_TYPE_INFO));
@@ -117,8 +133,6 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     private transient StreamRecord<IterationRecord<?>> reusable;
 
     private transient HeadOperatorStatus status;
-
-    private transient boolean endInput;
 
     // ------------- checkpoints -------------------
 
@@ -237,13 +251,21 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
                         typeSerializer,
                         fileSystem,
                         () -> new Path(basePath, "/checkpoint." + UUID.randomUUID().toString()));
+        headCheckpoints.put(
+                new Tuple2<>(
+                        getRuntimeContext().getIndexOfThisSubtask(),
+                        getRuntimeContext().getAttemptNumber()),
+                checkpoints);
 
         for (StatePartitionStreamProvider rawStateInput : context.getRawOperatorStateInputs()) {
             DataCacheSnapshot.replay(
                     rawStateInput.getStream(),
                     typeSerializer,
                     fileSystem,
-                    (record) -> processRecord(new StreamRecord<>(record)));
+                    (record) -> {
+                        LOG.info("replaying " + record);
+                        processRecord(new StreamRecord<>(record));
+                    });
         }
 
         LOG.info(
@@ -388,7 +410,9 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
                 checkpointAlignmentStatus.pendingGlobalEvents.add(globallyAlignedEvent);
             } else {
                 try {
-                    checkState(globallyAlignedEvent.getRound() > latestRoundGloballyAligned);
+                    checkState(
+                            globallyAlignedEvent.getRound() > latestRoundGloballyAligned
+                                    || latestRoundGloballyAligned == 0);
                     latestRoundGloballyAligned = globallyAlignedEvent.getRound();
 
                     if (globallyAlignedEvent.isTerminated()) {
@@ -428,27 +452,103 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
                                     ignored -> new CheckpointAlignmentStatus(false, true))
                             .notifiedFromCoordinator =
                     true;
-
-            if (endInput) {
-                // We will do something unbelieable...
-            }
         }
     }
 
     @Override
     public void endInput() throws Exception {
-        endInput = true;
-        IndexedInputGate[] inputGate = getContainingTask().getEnvironment().getAllInputGates();
-
-        if (latestRoundGloballyAligned < 0) {
-            sendEpochWatermarkToCoordinator(0);
+        if (latestRoundAligned < 0) {
+            latestRoundAligned = 0;
         }
-
         if (status != HeadOperatorStatus.TERMINATED) {
+            if (latestRoundGloballyAligned <= 0) {
+                sendEpochWatermarkToCoordinator(0);
+            }
+
+            // Unfortunately, we have to wait till the input tasks finished (namely
+            // received the EndOfPartition. Between them there might be checkpoint barriers,
+            // we hve to deal with them.
+            checkState(getContainingTask().getEnvironment().getAllInputGates().length == 1);
+            checkState(
+                    getContainingTask()
+                                    .getEnvironment()
+                                    .getAllInputGates()[0]
+                                    .getNumberOfInputChannels()
+                            == 1);
+            InputChannel inputChannel =
+                    getContainingTask().getEnvironment().getAllInputGates()[0].getChannel(0);
+            long latestCheckpointBarrier = 0;
+            boolean endOfPartitionReceived = false;
+            while (!endOfPartitionReceived) {
+                mailboxExecutor.tryYield();
+                Thread.sleep(200);
+
+                // Check if we have received new checkpoint barriers
+                List<AbstractEvent> events = parseEvents(inputChannel);
+                LOG.info("Parse event: " + events);
+
+                for (AbstractEvent event : events) {
+                    if (event instanceof CheckpointBarrier) {
+                        CheckpointBarrier barrier = (CheckpointBarrier) event;
+                        if (barrier.getId() > latestCheckpointBarrier) {
+                            getContainingTask()
+                                    .triggerCheckpointAsync(
+                                            new CheckpointMetaData(
+                                                    barrier.getId(), barrier.getTimestamp()),
+                                            barrier.getCheckpointOptions());
+                            latestCheckpointBarrier = barrier.getId();
+                        }
+
+                    } else if (event instanceof EndOfPartitionEvent) {
+                        endOfPartitionReceived = true;
+                    }
+                }
+            }
+
+            LOG.info("Our precedents is dead finally, congratulations...");
             while (status != HeadOperatorStatus.TERMINATED) {
                 mailboxExecutor.yield();
             }
         }
+    }
+
+    private List<AbstractEvent> parseEvents(InputChannel inputChannel) throws Exception {
+        List<AbstractEvent> events = new ArrayList<>();
+        if (inputChannel instanceof RemoteInputChannel) {
+            Class<?> seqBufferClass =
+                    Class.forName(
+                            "org.apache.flink.runtime.io.network.partition.consumer.RemoteInputChannel$SequenceBuffer");
+            PrioritizedDeque<?> queue =
+                    ReflectionUtils.getFieldValue(
+                            inputChannel, RemoteInputChannel.class, "receivedBuffers");
+            for (Object sequenceBuffer : queue) {
+                Buffer buffer =
+                        ReflectionUtils.getFieldValue(sequenceBuffer, seqBufferClass, "buffer");
+                if (!buffer.isBuffer()) {
+                    events.add(EventSerializer.fromBuffer(buffer, getClass().getClassLoader()));
+                }
+            }
+        } else if (inputChannel instanceof LocalInputChannel) {
+            PipelinedSubpartitionView subpartitionView =
+                    ReflectionUtils.getFieldValue(
+                            inputChannel, LocalInputChannel.class, "subpartitionView");
+            PipelinedSubpartition pipelinedSubpartition =
+                    ReflectionUtils.getFieldValue(
+                            subpartitionView, PipelinedSubpartitionView.class, "parent");
+            PrioritizedDeque<BufferConsumerWithPartialRecordLength> queue =
+                    ReflectionUtils.getFieldValue(
+                            pipelinedSubpartition, PipelinedSubpartition.class, "buffers");
+            for (BufferConsumerWithPartialRecordLength bufferConsumer : queue) {
+                if (!bufferConsumer.getBufferConsumer().isBuffer()) {
+                    events.add(
+                            EventSerializer.fromBuffer(
+                                    bufferConsumer.getBufferConsumer().copy().build(),
+                                    getClass().getClassLoader()));
+                }
+            }
+        }
+
+        return events;
     }
 
     @Override
@@ -459,6 +559,7 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     }
 
     private void sendEpochWatermarkToCoordinator(int round) {
+        LOG.info("Send epoch watermark " + round);
         operatorEventGateway.sendEventToCoordinator(
                 new SubtaskAlignedEvent(
                         round,

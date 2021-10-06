@@ -153,6 +153,20 @@ public class SharedProgressAligner {
                 subtaskIndex);
     }
 
+    public void removeProgress(OperatorID operatorId, int subtaskIndex) {
+        runInEventLoop(
+                () -> {
+                    statusByRound.forEach(
+                            (round, status) -> {
+                                status.reportedSubtasks.remove(
+                                        new OperatorInstanceID(subtaskIndex, operatorId));
+                            });
+                },
+                "Remove operator id {} and subtask index {}",
+                operatorId,
+                subtaskIndex);
+    }
+
     public void requestCheckpoint(
             long checkpointId,
             int operatorParallelism,

@@ -18,17 +18,27 @@
 
 package org.apache.flink.ml.iteration.itcases.operators;
 
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
+import org.apache.flink.api.java.typeutils.MapTypeInfo;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.ml.iteration.EpochWatermarkAware;
 import org.apache.flink.ml.iteration.IterationListener;
+import org.apache.flink.ml.iteration.operator.OperatorStateUtils;
+import org.apache.flink.runtime.state.FunctionInitializationContext;
+import org.apache.flink.runtime.state.FunctionSnapshotContext;
+import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.functions.ProcessFunction;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
@@ -37,7 +47,7 @@ import java.util.function.Supplier;
  * the received numbers to the next operator.
  */
 public class ReduceAllRoundProcessFunction extends ProcessFunction<Integer, Integer>
-        implements IterationListener<Integer>, EpochWatermarkAware {
+        implements IterationListener<Integer>, EpochWatermarkAware, CheckpointedFunction {
 
     private final boolean sync;
 
@@ -51,16 +61,52 @@ public class ReduceAllRoundProcessFunction extends ProcessFunction<Integer, Inte
 
     private transient Supplier<Integer> epochWatermarkSupplier;
 
+    private transient ListState<Map<Integer, Integer>> sums;
+
+    private transient ListState<Integer> caches;
+
     public ReduceAllRoundProcessFunction(boolean sync, int maxRound) {
         this.sync = sync;
         this.maxRound = maxRound;
     }
 
     @Override
-    public void open(Configuration parameters) throws Exception {
-        super.open(parameters);
+    public void initializeState(FunctionInitializationContext functionInitializationContext)
+            throws Exception {
         this.sumByRounds = new HashMap<>();
         cachedRecords = new ArrayList<>();
+
+        sums =
+                functionInitializationContext
+                        .getOperatorStateStore()
+                        .getListState(
+                                new ListStateDescriptor<>(
+                                        "test",
+                                        new MapTypeInfo<Integer, Integer>(
+                                                BasicTypeInfo.INT_TYPE_INFO,
+                                                BasicTypeInfo.INT_TYPE_INFO)));
+        Optional<Map<Integer, Integer>> old = OperatorStateUtils.getUniqueElement(sums, "test");
+        old.ifPresent(v -> sumByRounds.putAll(v));
+
+        caches =
+                functionInitializationContext
+                        .getOperatorStateStore()
+                        .getListState(new ListStateDescriptor<>("cache", Integer.class));
+        caches.get().forEach(v -> cachedRecords.add(v));
+    }
+
+    @Override
+    public void snapshotState(FunctionSnapshotContext functionSnapshotContext) throws Exception {
+        sums.clear();
+        sums.update(Collections.singletonList(new HashMap<>(sumByRounds)));
+
+        caches.clear();
+        caches.addAll(cachedRecords);
+    }
+
+    @Override
+    public void open(Configuration parameters) throws Exception {
+        super.open(parameters);
         this.outputTag = new OutputTag<OutputRecord<Integer>>("output") {};
     }
 
@@ -77,6 +123,7 @@ public class ReduceAllRoundProcessFunction extends ProcessFunction<Integer, Inte
             Collector<Integer> out) {
         int round = epochWatermarkSupplier.get();
         sumByRounds.compute(round, (k, v) -> v == null ? value : v + value);
+        System.out.println("Process " + value + "@" + round);
 
         if (round < maxRound) {
             if (!sync) {

@@ -141,6 +141,46 @@ public class BoundedAllRoundStreamIterationITCase {
         }
     }
 
+    @Test(timeout = 60000)
+    public void testSyncVariableAndConstantBoundedIterationWithCheckpoint() throws Exception {
+        try (MiniCluster miniCluster = new MiniCluster(createMiniClusterConfiguration(2, 2))) {
+            miniCluster.start();
+
+            // Create the test job
+            JobGraph jobGraph =
+                    createVariableAndConstantJobGraph(
+                            4,
+                            1000,
+                            false,
+                            10,
+                            false,
+                            4,
+                            new SinkFunction<OutputRecord<Integer>>() {
+                                @Override
+                                public void invoke(OutputRecord<Integer> value, Context context) {
+                                    result.add(value);
+                                }
+                            },
+                            true);
+            miniCluster.executeJobBlocking(jobGraph);
+
+            assertEquals(result.toString(), 6, result.size());
+
+            Map<Integer, Tuple2<Integer, Integer>> roundsStat = new HashMap<>();
+            for (int i = 0; i < 5; ++i) {
+                OutputRecord<Integer> next = result.take();
+                assertEquals(OutputRecord.Event.EPOCH_WATERMARK_INCREMENTED, next.getEvent());
+                Tuple2<Integer, Integer> state =
+                        roundsStat.computeIfAbsent(next.getRound(), ignored -> new Tuple2<>(0, 0));
+                state.f0++;
+                state.f1 = next.getValue();
+            }
+
+            verifyResult(roundsStat, 5, 1, 4 * (0 + 999) * 1000 / 2);
+            assertEquals(OutputRecord.Event.TERMINATED, result.take().getEvent());
+        }
+    }
+
     @Test
     public void testTerminationCriteria() throws Exception {
         try (MiniCluster miniCluster = new MiniCluster(createMiniClusterConfiguration(2, 2))) {

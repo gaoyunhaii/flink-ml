@@ -32,6 +32,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
@@ -43,6 +45,7 @@ public class Checkpoints<T> implements AutoCloseable {
     private final FileSystem fileSystem;
     private final SupplierWithException<Path, IOException> pathSupplier;
 
+    private final Set<Long> canceled = new HashSet<>();
     private final TreeMap<Long, PendingCheckpoint> uncompletedCheckpoints = new TreeMap<>();
 
     public Checkpoints(
@@ -56,11 +59,19 @@ public class Checkpoints<T> implements AutoCloseable {
 
     public void startLogging(long checkpointId, OperatorStateCheckpointOutputStream outputStream)
             throws IOException {
-        DataCacheWriter<T> dataCacheWriter =
-                new DataCacheWriter<>(typeSerializer, fileSystem, pathSupplier);
-        ResourceGuard.Lease snapshotLease = outputStream.acquireLease();
-        uncompletedCheckpoints.put(
-                checkpointId, new PendingCheckpoint(dataCacheWriter, outputStream, snapshotLease));
+        LOG.info("Start logging " + checkpointId);
+        synchronized (this) {
+            if (canceled.contains(checkpointId)) {
+                return;
+            }
+
+            DataCacheWriter<T> dataCacheWriter =
+                    new DataCacheWriter<>(typeSerializer, fileSystem, pathSupplier);
+            ResourceGuard.Lease snapshotLease = outputStream.acquireLease();
+            uncompletedCheckpoints.put(
+                    checkpointId,
+                    new PendingCheckpoint(dataCacheWriter, outputStream, snapshotLease));
+        }
     }
 
     public void append(T element) throws IOException {
@@ -96,6 +107,16 @@ public class Checkpoints<T> implements AutoCloseable {
                         });
 
         completedCheckpoints.clear();
+    }
+
+    public void cancel(long checkpointId) {
+        synchronized (this) {
+            canceled.add(checkpointId);
+            PendingCheckpoint pendingCheckpoint = uncompletedCheckpoints.get(checkpointId);
+            if (pendingCheckpoint != null) {
+                pendingCheckpoint.snapshotLease.close();
+            }
+        }
     }
 
     @Override
