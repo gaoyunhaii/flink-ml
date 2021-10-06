@@ -76,11 +76,17 @@ public class TailOperator extends AbstractStreamOperator<Void>
 
     @Override
     public void processElement(StreamRecord<IterationRecord<?>> streamRecord) {
+        System.out.println(
+                getRuntimeContext().getTaskNameWithSubtasks() + " Received " + streamRecord);
         recordConsumer.accept(streamRecord);
     }
 
     @Override
     public void prepareSnapshotPreBarrier(long checkpointId) throws Exception {
+        System.out.println(
+                getRuntimeContext().getTaskNameWithSubtasks()
+                        + " prepareSnapshotPreBarrier "
+                        + checkpointId);
         super.prepareSnapshotPreBarrier(checkpointId);
         channel.put(new StreamRecord<>(IterationRecord.newBarrier(checkpointId)));
     }

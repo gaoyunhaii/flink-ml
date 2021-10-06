@@ -25,6 +25,7 @@ import org.apache.flink.ml.iteration.DataStreamList;
 import org.apache.flink.ml.iteration.IterationBodyResult;
 import org.apache.flink.ml.iteration.Iterations;
 import org.apache.flink.ml.iteration.compile.DraftExecutionEnvironment;
+import org.apache.flink.ml.iteration.itcases.operators.FailingMap;
 import org.apache.flink.ml.iteration.itcases.operators.OutputRecord;
 import org.apache.flink.ml.iteration.itcases.operators.ReduceAllRoundProcessFunction;
 import org.apache.flink.ml.iteration.itcases.operators.SequenceSource;
@@ -32,8 +33,10 @@ import org.apache.flink.ml.iteration.itcases.operators.TwoInputReduceAllRoundPro
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.minicluster.MiniCluster;
 import org.apache.flink.runtime.minicluster.MiniClusterConfiguration;
+import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
+import org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.util.OutputTag;
@@ -210,9 +213,49 @@ public class UnboundedStreamIterationITCase {
         }
     }
 
+    @Test(timeout = 600000)
+    public void testVariableAndConstantsUnboundedIterationWithCheckpoint() throws Exception {
+        try (MiniCluster miniCluster = new MiniCluster(createMiniClusterConfiguration(2, 2))) {
+            miniCluster.start();
+
+            // Create the test job
+            JobGraph jobGraph =
+                    createVariableAndConstantJobGraph(
+                            4,
+                            1000,
+                            true,
+                            10,
+                            false,
+                            1,
+                            new SinkFunction<OutputRecord<Integer>>() {
+                                @Override
+                                public void invoke(OutputRecord<Integer> value, Context context) {
+                                    result.add(value);
+                                }
+                            },
+                            true);
+            miniCluster.submitJob(jobGraph);
+
+            int expectedOutputs = 2 * 4000;
+            Map<Integer, Tuple2<Integer, Integer>> roundsStat = new HashMap<>();
+            for (int i = 0; i < expectedOutputs; ++i) {
+                OutputRecord<Integer> next = result.take();
+                assertEquals(OutputRecord.Event.PROCESS_ELEMENT, next.getEvent());
+                Tuple2<Integer, Integer> state =
+                        roundsStat.computeIfAbsent(next.getRound(), ignored -> new Tuple2<>(0, 0));
+                state.f0++;
+                state.f1 = next.getValue();
+            }
+
+            verifyResult(roundsStat, 2, 4000, 4 * (0 + 999) * 1000 / 2);
+        }
+    }
+
     static MiniClusterConfiguration createMiniClusterConfiguration(int numTm, int numSlot) {
         Configuration configuration = new Configuration();
         configuration.set(RestOptions.PORT, 18081);
+        configuration.set(
+                ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
         return new MiniClusterConfiguration.Builder()
                 .setConfiguration(configuration)
                 .setNumTaskManagers(numTm)
@@ -265,8 +308,40 @@ public class UnboundedStreamIterationITCase {
             boolean sync,
             int maxRound,
             SinkFunction<OutputRecord<Integer>> sinkFunction) {
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        return createVariableAndConstantJobGraph(
+                numSources,
+                numRecordsPerSource,
+                holdSource,
+                period,
+                sync,
+                maxRound,
+                sinkFunction,
+                false);
+    }
+
+    static JobGraph createVariableAndConstantJobGraph(
+            int numSources,
+            int numRecordsPerSource,
+            boolean holdSource,
+            int period,
+            boolean sync,
+            int maxRound,
+            SinkFunction<OutputRecord<Integer>> sinkFunction,
+            boolean enableCheckpoint) {
+        StreamExecutionEnvironment env =
+                StreamExecutionEnvironment.getExecutionEnvironment(
+                        new Configuration() {
+                            {
+                                this.set(
+                                        ExecutionCheckpointingOptions
+                                                .ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH,
+                                        true);
+                            }
+                        });
         env.setParallelism(1);
+        if (enableCheckpoint) {
+            env.enableCheckpointing(500, CheckpointingMode.EXACTLY_ONCE);
+        }
         DataStream<Integer> variableSource =
                 env.addSource(new DraftExecutionEnvironment.EmptySource<Integer>() {})
                         .setParallelism(numSources)
@@ -287,6 +362,13 @@ public class UnboundedStreamIterationITCase {
                                             .process(
                                                     new TwoInputReduceAllRoundProcessFunction(
                                                             sync, maxRound));
+                            if (enableCheckpoint) {
+                                reducer =
+                                        reducer.map(
+                                                new FailingMap(
+                                                        numRecordsPerSource * numSources / 4));
+                            }
+
                             return new IterationBodyResult(
                                     DataStreamList.of(
                                             reducer.map(x -> x).setParallelism(numSources)),

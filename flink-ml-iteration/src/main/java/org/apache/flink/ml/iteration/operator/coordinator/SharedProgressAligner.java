@@ -159,6 +159,7 @@ public class SharedProgressAligner {
             CompletableFuture<byte[]> snapshotStateFuture) {
         runInEventLoop(
                 () -> {
+                    LOG.info("request {} for parallelism {}", checkpointId, operatorParallelism);
                     CheckpointStatus checkpointStatus =
                             checkpointStatuses.computeIfAbsent(
                                     checkpointId,
