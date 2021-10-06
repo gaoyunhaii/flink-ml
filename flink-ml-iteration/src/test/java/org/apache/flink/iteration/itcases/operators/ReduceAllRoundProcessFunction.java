@@ -18,17 +18,27 @@
 
 package org.apache.flink.iteration.itcases.operators;
 
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
+import org.apache.flink.api.java.typeutils.MapTypeInfo;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.iteration.IterationListener;
 import org.apache.flink.iteration.functions.EpochAwareAllRoundProcessFunction;
+import org.apache.flink.iteration.operator.OperatorStateUtils;
+import org.apache.flink.runtime.state.FunctionInitializationContext;
+import org.apache.flink.runtime.state.FunctionSnapshotContext;
+import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.functions.ProcessFunction;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.BiConsumer;
 
 /**
@@ -37,7 +47,7 @@ import java.util.function.BiConsumer;
  */
 public class ReduceAllRoundProcessFunction
         extends EpochAwareAllRoundProcessFunction<Integer, Integer>
-        implements IterationListener<Integer> {
+        implements IterationListener<Integer>, CheckpointedFunction {
 
     private final boolean sync;
 
@@ -49,16 +59,53 @@ public class ReduceAllRoundProcessFunction
 
     private transient OutputTag<OutputRecord<Integer>> outputTag;
 
+    private transient ListState<Map<Integer, Integer>> sumByRoundsState;
+
+    private transient ListState<Integer> cachedRecordsState;
+
     public ReduceAllRoundProcessFunction(boolean sync, int maxRound) {
         this.sync = sync;
         this.maxRound = maxRound;
     }
 
     @Override
-    public void open(Configuration parameters) throws Exception {
-        super.open(parameters);
+    public void initializeState(FunctionInitializationContext functionInitializationContext)
+            throws Exception {
         this.sumByEpochs = new HashMap<>();
         cachedRecords = new ArrayList<>();
+
+        sumByRoundsState =
+                functionInitializationContext
+                        .getOperatorStateStore()
+                        .getListState(
+                                new ListStateDescriptor<>(
+                                        "test",
+                                        new MapTypeInfo<Integer, Integer>(
+                                                BasicTypeInfo.INT_TYPE_INFO,
+                                                BasicTypeInfo.INT_TYPE_INFO)));
+        Optional<Map<Integer, Integer>> old =
+                OperatorStateUtils.getUniqueElement(sumByRoundsState, "test");
+        old.ifPresent(v -> sumByEpochs.putAll(v));
+
+        cachedRecordsState =
+                functionInitializationContext
+                        .getOperatorStateStore()
+                        .getListState(new ListStateDescriptor<>("cache", Integer.class));
+        cachedRecordsState.get().forEach(v -> cachedRecords.add(v));
+    }
+
+    @Override
+    public void snapshotState(FunctionSnapshotContext functionSnapshotContext) throws Exception {
+        sumByRoundsState.clear();
+        sumByRoundsState.update(Collections.singletonList(new HashMap<>(sumByEpochs)));
+
+        cachedRecordsState.clear();
+        cachedRecordsState.addAll(cachedRecords);
+    }
+
+    @Override
+    public void open(Configuration parameters) throws Exception {
+        super.open(parameters);
         this.outputTag = new OutputTag<OutputRecord<Integer>>("output") {};
     }
 
