@@ -23,8 +23,7 @@ import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.core.fs.CloseableRegistry;
-import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.metrics.groups.OperatorMetricGroup;
 import org.apache.flink.ml.common.broadcast.BroadcastContext;
 import org.apache.flink.ml.iteration.datacache.nonkeyed.Segment;
@@ -36,11 +35,13 @@ import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.apache.flink.runtime.state.CheckpointStreamFactory;
 import org.apache.flink.runtime.state.CheckpointableKeyedStateBackend;
 import org.apache.flink.runtime.state.OperatorStateBackend;
+import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StatePartitionStreamProvider;
+import org.apache.flink.runtime.state.StateSnapshotContext;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.BoundedMultiInput;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
-import org.apache.flink.streaming.api.operators.KeyContext;
+import org.apache.flink.streaming.api.operators.InternalTimeServiceManager;
 import org.apache.flink.streaming.api.operators.OperatorSnapshotFutures;
 import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.api.operators.StreamOperator;
@@ -48,9 +49,9 @@ import org.apache.flink.streaming.api.operators.StreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.StreamOperatorFactoryUtil;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.api.operators.StreamOperatorStateContext;
+import org.apache.flink.streaming.api.operators.StreamOperatorStateHandler;
 import org.apache.flink.streaming.api.operators.StreamTaskStateInitializer;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.flink.streaming.runtime.tasks.ProcessingTimeService;
 import org.apache.flink.streaming.runtime.tasks.StreamTask;
 import org.apache.flink.streaming.runtime.tasks.mailbox.TaskMailbox;
 import org.apache.flink.util.CloseableIterable;
@@ -58,16 +59,16 @@ import org.apache.flink.util.CloseableIterable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import java.util.Objects;
-
-import static org.apache.flink.util.Preconditions.checkState;
+import java.util.Optional;
 
 /** Base class for the broadcast wrapper operators. */
 public abstract class AbstractBroadcastWrapperOperator<T, S extends StreamOperator<T>>
-        implements StreamOperator<T>, BoundedMultiInput {
+        implements StreamOperator<T>,
+                BoundedMultiInput,
+                StreamOperatorStateHandler.CheckpointedStreamOperator {
 
     private static final Logger LOG =
             LoggerFactory.getLogger(AbstractBroadcastWrapperOperator.class);
@@ -100,15 +101,21 @@ public abstract class AbstractBroadcastWrapperOperator<T, S extends StreamOperat
 
     protected OperatorStateBackend operatorStateBackend;
 
-    @Nullable protected CheckpointableKeyedStateBackend <?> keyedStateBackend;
+    @Nullable protected CheckpointableKeyedStateBackend<?> keyedStateBackend;
 
     protected final transient int indexOfSubtask;
 
-    /** segment list used to maintain the meta information of caching the elements on remote disk. */
+    /**
+     * segment list used to maintain the meta information of caching the elements on remote disk.
+     */
     protected ListState<Segment> segmentListState;
 
     /** raw state inputs. */
-    protected CloseableIterable <StatePartitionStreamProvider> rawStateInputs;
+    protected CloseableIterable<StatePartitionStreamProvider> rawStateInputs;
+
+    private transient StreamOperatorStateHandler stateHandler;
+
+    private transient InternalTimeServiceManager<?> timeServiceManager;
 
     public AbstractBroadcastWrapperOperator(
             StreamOperatorParameters<T> parameters,
@@ -196,27 +203,76 @@ public abstract class AbstractBroadcastWrapperOperator<T, S extends StreamOperat
     }
 
     @Override
+    public void initializeState(StreamTaskStateInitializer streamTaskStateManager)
+            throws Exception {
+        final TypeSerializer<?> keySerializer =
+                streamConfig.getStateKeySerializer(containingTask.getUserCodeClassLoader());
+
+        StreamOperatorStateContext streamOperatorStateContext =
+                streamTaskStateManager.streamOperatorStateContext(
+                        getOperatorID(),
+                        getClass().getSimpleName(),
+                        parameters.getProcessingTimeService(),
+                        this,
+                        keySerializer,
+                        containingTask.getCancelables(),
+                        metrics,
+                        streamConfig.getManagedMemoryFractionOperatorUseCaseOfSlot(
+                                ManagedMemoryUseCase.STATE_BACKEND,
+                                containingTask
+                                        .getEnvironment()
+                                        .getTaskManagerInfo()
+                                        .getConfiguration(),
+                                containingTask.getUserCodeClassLoader()),
+                        false);
+        stateHandler =
+                new StreamOperatorStateHandler(
+                        streamOperatorStateContext,
+                        containingTask.getExecutionConfig(),
+                        containingTask.getCancelables());
+        stateHandler.initializeOperatorState(this);
+
+        this.timeServiceManager = streamOperatorStateContext.internalTimerServiceManager();
+
+        operatorStateBackend = streamOperatorStateContext.operatorStateBackend();
+        keyedStateBackend = streamOperatorStateContext.keyedStateBackend();
+        broadcastVariablesReady = false;
+        rawStateInputs = streamOperatorStateContext.rawOperatorStateInputs();
+    }
+
+    @Override
     public OperatorSnapshotFutures snapshotState(
             long checkpointId,
             long timestamp,
             CheckpointOptions checkpointOptions,
             CheckpointStreamFactory storageLocation)
             throws Exception {
-        return wrappedOperator.snapshotState(
-                checkpointId, timestamp, checkpointOptions, storageLocation);
+        return stateHandler.snapshotState(
+                this,
+                Optional.ofNullable(timeServiceManager),
+                streamConfig.getOperatorName(),
+                checkpointId,
+                timestamp,
+                checkpointOptions,
+                storageLocation,
+                false);
     }
 
     @Override
-    public void initializeState(StreamTaskStateInitializer streamTaskStateManager)
+    public void initializeState(StateInitializationContext stateInitializationContext)
             throws Exception {
-        RecordingStreamTaskStateInitializer recordingStreamTaskStateInitializer =
-                new RecordingStreamTaskStateInitializer(streamTaskStateManager);
-        wrappedOperator.initializeState(recordingStreamTaskStateInitializer);
-        checkState(recordingStreamTaskStateInitializer.lastCreated != null);
-        operatorStateBackend = recordingStreamTaskStateInitializer.lastCreated.operatorStateBackend();
-        keyedStateBackend = recordingStreamTaskStateInitializer.lastCreated.keyedStateBackend();
-        broadcastVariablesReady = false;
-        rawStateInputs = recordingStreamTaskStateInitializer.lastCreated.rawOperatorStateInputs();
+        if (wrappedOperator instanceof StreamOperatorStateHandler.CheckpointedStreamOperator) {
+            stateHandler.initializeOperatorState(
+                    (StreamOperatorStateHandler.CheckpointedStreamOperator) wrappedOperator);
+        }
+    }
+
+    @Override
+    public void snapshotState(StateSnapshotContext stateSnapshotContext) throws Exception {
+        if (wrappedOperator instanceof StreamOperatorStateHandler.CheckpointedStreamOperator) {
+            ((StreamOperatorStateHandler.CheckpointedStreamOperator) wrappedOperator)
+                    .snapshotState(stateSnapshotContext);
+        }
     }
 
     @Override
@@ -266,43 +322,6 @@ public abstract class AbstractBroadcastWrapperOperator<T, S extends StreamOperat
         }
         if (wrappedOperator instanceof BoundedMultiInput) {
             ((BoundedMultiInput) wrappedOperator).endInput(inputId);
-        }
-    }
-
-    private static class RecordingStreamTaskStateInitializer implements StreamTaskStateInitializer {
-
-        private final StreamTaskStateInitializer wrapped;
-
-        StreamOperatorStateContext lastCreated;
-
-        public RecordingStreamTaskStateInitializer(StreamTaskStateInitializer wrapped) {
-            this.wrapped = wrapped;
-        }
-
-        @Override
-        public StreamOperatorStateContext streamOperatorStateContext(
-                @Nonnull OperatorID operatorID,
-                @Nonnull String s,
-                @Nonnull ProcessingTimeService processingTimeService,
-                @Nonnull KeyContext keyContext,
-                @Nullable TypeSerializer<?> typeSerializer,
-                @Nonnull CloseableRegistry closeableRegistry,
-                @Nonnull MetricGroup metricGroup,
-                double v,
-                boolean b)
-                throws Exception {
-            lastCreated =
-                    wrapped.streamOperatorStateContext(
-                            operatorID,
-                            s,
-                            processingTimeService,
-                            keyContext,
-                            typeSerializer,
-                            closeableRegistry,
-                            metricGroup,
-                            v,
-                            b);
-            return lastCreated;
         }
     }
 }
