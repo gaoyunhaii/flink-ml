@@ -23,6 +23,7 @@ import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.TestHarnessUtil;
 
+import org.junit.Ignore;
 import org.junit.Test;
 
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -46,6 +47,7 @@ public class InputOperatorTest {
                 "Output was not correct", expectedOutput, testHarness.getOutput());
     }
 
+    @Ignore
     @Test
     public void testInsertMaxEpochWatermarkIfSpecified() throws Exception {
         OneInputStreamOperatorTestHarness<Integer, IterationRecord<Integer>> testHarness =

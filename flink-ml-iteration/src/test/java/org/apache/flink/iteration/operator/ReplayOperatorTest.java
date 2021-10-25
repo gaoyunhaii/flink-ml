@@ -28,6 +28,7 @@ import org.apache.flink.streaming.runtime.tasks.OneInputStreamTask;
 import org.apache.flink.streaming.runtime.tasks.StreamTaskMailboxTestHarness;
 import org.apache.flink.streaming.runtime.tasks.StreamTaskMailboxTestHarnessBuilder;
 
+import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -45,6 +46,7 @@ public class ReplayOperatorTest {
 
     @Rule public TemporaryFolder tempFolder = new TemporaryFolder();
 
+    @Ignore
     @Test(timeout = 60000)
     public void testReplaying() throws Exception {
         final int numRecords = 10;
