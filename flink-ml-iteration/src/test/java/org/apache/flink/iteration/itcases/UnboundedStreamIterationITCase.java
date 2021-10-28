@@ -213,7 +213,7 @@ public class UnboundedStreamIterationITCase {
 
     static MiniClusterConfiguration createMiniClusterConfiguration(int numTm, int numSlot) {
         Configuration configuration = new Configuration();
-        configuration.set(RestOptions.PORT, 18081);
+        configuration.set(RestOptions.BIND_PORT, "18081-19091");
         configuration.set(
                 ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
         return new MiniClusterConfiguration.Builder()

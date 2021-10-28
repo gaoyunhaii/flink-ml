@@ -97,7 +97,7 @@ public class BoundedAllRoundCheckpointTest {
             // Create the test job
             JobGraph jobGraph =
                     createVariableAndConstantJobGraph(
-                            4, 1000, false, 5, sync, 4, failoverCount, new CollectSink(result));
+                            4, 1000, false, 0, sync, 4, failoverCount, new CollectSink(result));
             miniCluster.executeJobBlocking(jobGraph);
 
             Map<Integer, Tuple2<Integer, Integer>> roundsStat = new HashMap<>();
