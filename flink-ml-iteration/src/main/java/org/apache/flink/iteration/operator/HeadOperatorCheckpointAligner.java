@@ -86,6 +86,11 @@ class HeadOperatorCheckpointAligner {
         return checkpointAlignment.pendingGlobalEvents;
     }
 
+    List<GloballyAlignedEvent> abortCheckpoint(long checkpointId) {
+        CheckpointAlignment checkpointAlignment = checkpointAlignmments.remove(checkpointId);
+        return checkpointAlignment.pendingGlobalEvents;
+    }
+
     private static class CheckpointAlignment {
 
         final List<GloballyAlignedEvent> pendingGlobalEvents;

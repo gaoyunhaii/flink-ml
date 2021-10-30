@@ -184,6 +184,7 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
                                                 + " to "
                                                 + getRuntimeContext()
                                                         .getNumberOfParallelSubtasks()));
+        parallelismState.clear();
 
         // Initialize the status and the record processor.
         processorContext = new ContextImpl();
@@ -292,6 +293,13 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         checkpointAligner
                 .onStateSnapshot(context.getCheckpointId())
                 .forEach(this::processGloballyAlignedEvent);
+    }
+
+    @Override
+    public void notifyCheckpointAborted(long checkpointId) throws Exception {
+        super.notifyCheckpointAborted(checkpointId);
+
+        checkpointAligner.abortCheckpoint(checkpointId).forEach(this::processGloballyAlignedEvent);
     }
 
     @Override

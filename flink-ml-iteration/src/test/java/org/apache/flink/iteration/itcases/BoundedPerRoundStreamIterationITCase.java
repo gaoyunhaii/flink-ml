@@ -102,7 +102,7 @@ public class BoundedPerRoundStreamIterationITCase {
     private MiniClusterConfiguration createMiniClusterConfiguration(int numTm, int numSlot)
             throws IOException {
         Configuration configuration = new Configuration();
-        configuration.set(RestOptions.PORT, 18081);
+        configuration.set(RestOptions.BIND_PORT, "18081-19091");
         configuration.set(
                 IterationOptions.DATA_CACHE_PATH,
                 "file://" + tempFolder.newFolder().getAbsolutePath());

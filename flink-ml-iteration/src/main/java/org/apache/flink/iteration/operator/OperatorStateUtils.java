@@ -20,7 +20,10 @@ package org.apache.flink.iteration.operator;
 
 import org.apache.flink.api.common.state.ListState;
 
+import org.apache.commons.collections.IteratorUtils;
+
 import java.util.Iterator;
+import java.util.List;
 import java.util.Optional;
 
 import static org.apache.flink.util.Preconditions.checkState;
@@ -31,12 +34,15 @@ public class OperatorStateUtils {
     public static <T> Optional<T> getUniqueElement(ListState<T> listState, String stateName)
             throws Exception {
         Iterator<T> iterator = listState.get().iterator();
-        if (!iterator.hasNext()) {
+        List<T> values = IteratorUtils.toList(iterator);
+
+        if (values.size() == 0) {
             return Optional.empty();
         }
 
-        T result = iterator.next();
-        checkState(!iterator.hasNext(), "The state " + stateName + " has more that one elements");
-        return Optional.of(result);
+        checkState(
+                values.size() == 1,
+                "The state " + stateName + " has more that one elements: " + values);
+        return Optional.of(values.get(0));
     }
 }

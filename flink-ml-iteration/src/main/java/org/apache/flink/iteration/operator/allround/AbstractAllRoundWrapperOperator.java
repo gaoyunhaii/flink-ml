@@ -157,6 +157,7 @@ public abstract class AbstractAllRoundWrapperOperator<T, S extends StreamOperato
                                                         .getEnvironment()
                                                         .getTaskInfo()
                                                         .getNumberOfParallelSubtasks()));
+        parallelismState.clear();
 
         latestEpochWatermarkState =
                 operatorStateStore.getListState(
