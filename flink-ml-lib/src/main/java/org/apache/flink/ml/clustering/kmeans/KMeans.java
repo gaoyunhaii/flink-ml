@@ -38,7 +38,6 @@ import org.apache.flink.iteration.IterationListener;
 import org.apache.flink.iteration.Iterations;
 import org.apache.flink.iteration.ReplayableDataStreamList;
 import org.apache.flink.ml.api.core.Estimator;
-import org.apache.flink.ml.common.EndOfStreamWindows;
 import org.apache.flink.ml.common.MapPartitionFunctionWrapper;
 import org.apache.flink.ml.distance.EuclideanDistanceMeasure;
 import org.apache.flink.ml.linalg.DenseVector;
@@ -107,9 +106,6 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
                                                 typeInfo,
                                                 new SelectNearestCentroidOperator())
                                         .map(new CountAppender())
-                                        .keyBy(t -> t.f0)
-                                        .window(EndOfStreamWindows.get())
-                                        .reduce(new CentroidAccumulator())
                                         .map(new CentroidAverager());
 
                         return new IterationBodyResult(
@@ -122,7 +118,7 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
         DataStreamList output =
                 Iterations.iterateBoundedStreamsUntilTermination(
                         DataStreamList.of(initCentroids),
-                        ReplayableDataStreamList.replay(points),
+                        ReplayableDataStreamList.notReplay(points),
                         IterationConfig.newBuilder()
                                 .setOperatorLifeCycle(IterationConfig.OperatorLifeCycle.PER_ROUND)
                                 .build(),
@@ -234,6 +230,7 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
                     Tuple2<Integer, DenseVector>, Tuple3<Integer, DenseVector, Long>> {
         @Override
         public Tuple3<Integer, DenseVector, Long> map(Tuple2<Integer, DenseVector> value) {
+            System.out.println("CountAppender...." + value);
             return Tuple3.of(value.f0, value.f1, 1L);
         }
     }
@@ -244,7 +241,8 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
                             DenseVector,
                             Tuple2<Integer, DenseVector>,
                             Tuple2<Integer, DenseVector>>,
-                    BoundedMultiInput {
+                    BoundedMultiInput,
+                    IterationListener<Tuple2<Integer, DenseVector>> {
 
         List<DenseVector> points = new ArrayList<>();
         List<Tuple2<Integer, DenseVector>> centroids = new ArrayList<>();
@@ -253,6 +251,10 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
         @Override
         public void endInput(int i) throws Exception {
             numEndedInputs++;
+
+            System.out.println(
+                    "flag........SelectNearestCentroidOperator endInput " + numEndedInputs);
+
             if (numEndedInputs == 2) {
                 for (DenseVector point : points) {
                     double minDistance = Double.MAX_VALUE;
@@ -273,13 +275,31 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
 
         @Override
         public void processElement1(StreamRecord<DenseVector> streamRecord) throws Exception {
+            System.out.println("flag........SelectNearestCentroidOperator processElement1");
             points.add(streamRecord.getValue());
         }
 
         @Override
         public void processElement2(StreamRecord<Tuple2<Integer, DenseVector>> streamRecord)
                 throws Exception {
+            System.out.println("flag........SelectNearestCentroidOperator processElement2");
             centroids.add(streamRecord.getValue());
+        }
+
+        @Override
+        public void onEpochWatermarkIncremented(
+                int epochWatermark,
+                Context context,
+                Collector<Tuple2<Integer, DenseVector>> collector) {
+            System.out.println(
+                    "flag.......SelectNearestCentroidOperator onEpochWatermarkIncremented "
+                            + epochWatermark);
+        }
+
+        @Override
+        public void onIterationTerminated(
+                Context context, Collector<Tuple2<Integer, DenseVector>> collector) {
+            System.out.println("flag.......SelectNearestCentroidOperator onIterationTerminated ");
         }
     }
 
@@ -324,13 +344,18 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
         @Override
         public void onEpochWatermarkIncremented(
                 int epochWatermark, Context context, Collector<Integer> out) {
+            System.out.println(
+                    "flag.......RoundBasedTerminationCriteria onEpochWatermarkIncremented "
+                            + epochWatermark);
             if (epochWatermark < maxRound) {
                 out.collect(0);
             }
         }
 
         @Override
-        public void onIterationTerminated(Context context, Collector<Integer> collector) {}
+        public void onIterationTerminated(Context context, Collector<Integer> collector) {
+            System.out.println("flag.......RoundBasedTerminationCriteria onIterationTerminated ");
+        }
     }
 
     private static DataStream<Tuple2<Integer, DenseVector>> initRandom(
