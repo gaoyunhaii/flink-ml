@@ -77,13 +77,22 @@ public class ReplayOperator<T> extends AbstractStreamOperator<IterationRecord<T>
         progressTracker = OperatorEpochWatermarkTrackerFactory.create(config, containingTask, this);
 
         try {
-            basePath =
-                    new Path(
-                            containingTask
-                                    .getEnvironment()
-                                    .getTaskManagerInfo()
-                                    .getConfiguration()
-                                    .get(IterationOptions.DATA_CACHE_PATH));
+            String baseStr =
+                    containingTask
+                            .getEnvironment()
+                            .getTaskManagerInfo()
+                            .getConfiguration()
+                            .get(IterationOptions.DATA_CACHE_PATH);
+            if (baseStr == null) {
+                baseStr =
+                        "file://"
+                                + containingTask
+                                        .getEnvironment()
+                                        .getIOManager()
+                                        .getSpillingDirectoriesPaths()[0];
+            }
+
+            basePath = new Path(baseStr);
             fileSystem = basePath.getFileSystem();
 
             IterationRecordSerializer<T> iterationRecordSerializer =
