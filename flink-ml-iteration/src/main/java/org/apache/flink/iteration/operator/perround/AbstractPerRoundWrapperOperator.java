@@ -63,7 +63,6 @@ import org.apache.flink.util.InstantiationUtil;
 import org.apache.flink.util.function.BiConsumerWithException;
 
 import org.rocksdb.RocksDB;
-import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -464,7 +463,7 @@ public abstract class AbstractPerRoundWrapperOperator<T, S extends StreamOperato
                             entry -> {
                                 try {
                                     db.dropColumnFamily(entry.getValue().columnFamilyHandle);
-                                } catch (RocksDBException e) {
+                                } catch (Exception e) {
                                     LOG.error(
                                             "Failed to drop state {} for round {}",
                                             entry.getKey(),
