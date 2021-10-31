@@ -19,7 +19,9 @@
 package org.apache.flink.iteration.operator.perround;
 
 import org.apache.flink.iteration.IterationRecord;
+import org.apache.flink.iteration.operator.OperatorUtils;
 import org.apache.flink.streaming.api.graph.StreamEdge;
+import org.apache.flink.streaming.api.operators.BoundedMultiInput;
 import org.apache.flink.streaming.api.operators.Input;
 import org.apache.flink.streaming.api.operators.MultipleInputStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorFactory;
@@ -31,7 +33,9 @@ import org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus;
 import org.apache.flink.util.FlinkRuntimeException;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /** Per-round wrapper for the multiple-inputs operator. */
@@ -39,10 +43,37 @@ public class MultipleInputPerRoundWrapperOperator<OUT>
         extends AbstractPerRoundWrapperOperator<OUT, MultipleInputStreamOperator<OUT>>
         implements MultipleInputStreamOperator<IterationRecord<OUT>> {
 
+    private final int numberOfInputs;
+
+    private final Map<Integer, List<Input>> operatorInputs = new HashMap<>();
+
     public MultipleInputPerRoundWrapperOperator(
             StreamOperatorParameters<IterationRecord<OUT>> parameters,
             StreamOperatorFactory<OUT> operatorFactory) {
         super(parameters, operatorFactory);
+
+        // Determine how much inputs we have
+        List<StreamEdge> inEdges =
+                streamConfig.getInPhysicalEdges(containingTask.getUserCodeClassLoader());
+        this.numberOfInputs =
+                inEdges.stream().map(StreamEdge::getTypeNumber).collect(Collectors.toSet()).size();
+    }
+
+    @Override
+    protected void emitMaxWatermarkAndEndInput(MultipleInputStreamOperator<OUT> operator, int round)
+            throws Exception {
+        OperatorUtils.processOperatorOrUdfIfSatisfy(
+                operator,
+                BoundedMultiInput.class,
+                boundedMultiInput -> {
+                    for (int i = 0; i < numberOfInputs; ++i) {
+                        boundedMultiInput.endInput(i + 1);
+                    }
+                });
+
+        for (int i = 0; i < numberOfInputs; ++i) {
+            operatorInputs.get(round).get(i).processWatermark(new Watermark(Long.MAX_VALUE));
+        }
     }
 
     private <IN> void processElement(
@@ -71,12 +102,6 @@ public class MultipleInputPerRoundWrapperOperator<OUT>
     public List<Input> getInputs() {
         List<Input> proxyInputs = new ArrayList<>();
 
-        // Determine how much inputs we have
-        List<StreamEdge> inEdges =
-                streamConfig.getInPhysicalEdges(containingTask.getUserCodeClassLoader());
-        int numberOfInputs =
-                inEdges.stream().map(StreamEdge::getTypeNumber).collect(Collectors.toSet()).size();
-
         for (int i = 0; i < numberOfInputs; ++i) {
             // TODO: Note that here we relies on the assumption that the
             // stream graph generator labels the input from 1 to n for
@@ -99,18 +124,24 @@ public class MultipleInputPerRoundWrapperOperator<OUT>
 
         @Override
         public void processElement(StreamRecord<IterationRecord<IN>> element) throws Exception {
-            MultipleInputStreamOperator<OUT> operator =
-                    getWrappedOperator(element.getValue().getEpoch());
+            if (!operatorInputs.containsKey(element.getValue().getEpoch())) {
+                MultipleInputStreamOperator<OUT> operator =
+                        getWrappedOperator(element.getValue().getEpoch());
+                operatorInputs.put(element.getValue().getEpoch(), operator.getInputs());
+            }
 
             MultipleInputPerRoundWrapperOperator.this.processElement(
-                    inputIndex, operator.getInputs().get(inputIndex), reusedInput, element);
+                    inputIndex,
+                    operatorInputs.get(element.getValue().getEpoch()).get(inputIndex),
+                    reusedInput,
+                    element);
         }
 
         @Override
         public void processWatermark(Watermark mark) throws Exception {
             processForEachWrappedOperator(
                     (round, wrappedOperator) -> {
-                        wrappedOperator.getInputs().get(inputIndex).processWatermark(mark);
+                        operatorInputs.get(round).get(inputIndex).processWatermark(mark);
                     });
         }
 
@@ -118,8 +149,8 @@ public class MultipleInputPerRoundWrapperOperator<OUT>
         public void processWatermarkStatus(WatermarkStatus watermarkStatus) throws Exception {
             processForEachWrappedOperator(
                     (round, wrappedOperator) -> {
-                        wrappedOperator
-                                .getInputs()
+                        operatorInputs
+                                .get(round)
                                 .get(inputIndex)
                                 .processWatermarkStatus(watermarkStatus);
                     });

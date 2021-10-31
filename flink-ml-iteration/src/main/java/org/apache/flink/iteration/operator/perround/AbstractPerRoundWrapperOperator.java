@@ -27,7 +27,6 @@ import org.apache.flink.contrib.streaming.state.RocksDBKeyedStateBackend;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.operator.AbstractWrapperOperator;
-import org.apache.flink.iteration.operator.OperatorUtils;
 import org.apache.flink.iteration.proxy.state.ProxyStateSnapshotContext;
 import org.apache.flink.iteration.proxy.state.ProxyStreamOperatorStateContext;
 import org.apache.flink.iteration.utils.ReflectionUtils;
@@ -44,7 +43,6 @@ import org.apache.flink.runtime.state.OperatorStateBackend;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StateSnapshotContext;
 import org.apache.flink.runtime.state.heap.HeapKeyedStateBackend;
-import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.InternalTimeServiceManager;
 import org.apache.flink.streaming.api.operators.OperatorSnapshotFutures;
 import org.apache.flink.streaming.api.operators.StreamOperator;
@@ -138,6 +136,23 @@ public abstract class AbstractPerRoundWrapperOperator<T, S extends StreamOperato
         }
 
         return wrappedOperator;
+    }
+
+    protected abstract void emitMaxWatermarkAndEndInput(S operator, int round) throws Exception;
+
+    private void closeStreamOperator(S operator, int round) throws Exception {
+        setIterationContextRound(round);
+        emitMaxWatermarkAndEndInput(operator, round);
+        operator.finish();
+        operator.close();
+        setIterationContextRound(null);
+
+        // Cleanup the states used by this operator.
+        cleanupOperatorStates(round);
+
+        if (stateHandler.getKeyedStateBackend() != null) {
+            cleanupKeyedStates(round);
+        }
     }
 
     @Override
@@ -392,22 +407,6 @@ public abstract class AbstractPerRoundWrapperOperator<T, S extends StreamOperato
                         new ProxyStreamOperatorStateContext(
                                 streamOperatorStateContext, getRoundStatePrefix(round)));
         operator.open();
-    }
-
-    private void closeStreamOperator(S operator, int round) throws Exception {
-        setIterationContextRound(round);
-        OperatorUtils.processOperatorOrUdfIfSatisfy(
-                operator, BoundedOneInput.class, BoundedOneInput::endInput);
-        operator.finish();
-        operator.close();
-        setIterationContextRound(null);
-
-        // Cleanup the states used by this operator.
-        cleanupOperatorStates(round);
-
-        if (stateHandler.getKeyedStateBackend() != null) {
-            cleanupKeyedStates(round);
-        }
     }
 
     private void cleanupOperatorStates(int round) {
