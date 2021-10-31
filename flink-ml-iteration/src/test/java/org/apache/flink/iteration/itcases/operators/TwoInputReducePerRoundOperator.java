@@ -19,7 +19,6 @@
 package org.apache.flink.iteration.itcases.operators;
 
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
-import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.util.OutputTag;
@@ -31,7 +30,7 @@ import static org.apache.flink.iteration.itcases.operators.OutputRecord.Event.TE
  * the received numbers to the next operator.
  */
 public class TwoInputReducePerRoundOperator extends AbstractStreamOperator<Integer>
-        implements TwoInputStreamOperator<Integer, Integer, Integer>, BoundedOneInput {
+        implements TwoInputStreamOperator<Integer, Integer, Integer> {
 
     public static final OutputTag<OutputRecord<Integer>> OUTPUT_TAG =
             new OutputTag<OutputRecord<Integer>>("output") {};
@@ -52,7 +51,7 @@ public class TwoInputReducePerRoundOperator extends AbstractStreamOperator<Integ
     }
 
     @Override
-    public void endInput() throws Exception {
+    public void finish() throws Exception {
         output.collect(OUTPUT_TAG, new StreamRecord<>(new OutputRecord<>(TERMINATED, round, sum)));
     }
 }
