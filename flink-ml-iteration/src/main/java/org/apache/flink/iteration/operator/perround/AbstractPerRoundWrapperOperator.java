@@ -294,7 +294,9 @@ public abstract class AbstractPerRoundWrapperOperator<T, S extends StreamOperato
 
     private <T> void setKeyContextElement(StreamRecord<T> record, KeySelector<T, ?> selector)
             throws Exception {
-        if (selector != null) {
+        if (selector != null
+                && ((IterationRecord<?>) record.getValue()).getType()
+                        == IterationRecord.Type.RECORD) {
             Object key = selector.getKey(record.getValue());
             setCurrentKey(key);
         }
