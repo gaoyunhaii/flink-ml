@@ -337,7 +337,7 @@ public abstract class AbstractPerRoundWrapperOperator<T, S extends StreamOperato
             return null;
         }
 
-        return stateHandler.getKeyedStateStore().orElse(null);
+        return stateHandler.getCurrentKey();
     }
 
     protected void reportOrForwardLatencyMarker(LatencyMarker marker) {

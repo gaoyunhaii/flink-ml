@@ -53,7 +53,7 @@ public class ProxyOutput<T> implements Output<StreamRecord<T>> {
 
     @Override
     public void emitWatermark(Watermark mark) {
-        output.emitWatermark(mark);
+        // not output watermark for now.
     }
 
     @Override
