@@ -206,6 +206,12 @@ public class ReadWriteUtils {
         stage.set(param, (T) value);
     }
 
+    public static void setStageParams(Stage<?> stage, Map<Param<?>, Object> paramMap) {
+        for (Map.Entry<Param<?>, Object> entry : paramMap.entrySet()) {
+            setStageParam(stage, entry.getKey(), entry.getValue());
+        }
+    }
+
     /**
      * Loads the stage with the saved parameters from the given path. This method reads the metadata
      * file under the given path, instantiates the stage using its no-argument constructor, and
