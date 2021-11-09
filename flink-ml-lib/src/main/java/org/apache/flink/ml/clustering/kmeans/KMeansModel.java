@@ -19,12 +19,15 @@
 package org.apache.flink.ml.clustering.kmeans;
 
 import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.serialization.Encoder;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.java.typeutils.ObjectArrayTypeInfo;
 import org.apache.flink.api.java.typeutils.RowTypeInfo;
+import org.apache.flink.connector.file.sink.FileSink;
+import org.apache.flink.core.fs.Path;
 import org.apache.flink.ml.api.core.Model;
 import org.apache.flink.ml.common.datastream.TableUtils;
 import org.apache.flink.ml.distance.DistanceMeasure;
@@ -34,6 +37,8 @@ import org.apache.flink.ml.util.ParamUtils;
 import org.apache.flink.ml.util.ReadWriteUtils;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.functions.sink.filesystem.bucketassigners.BasePathBucketAssigner;
+import org.apache.flink.streaming.api.functions.sink.filesystem.rollingpolicies.OnCheckpointRollingPolicy;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
@@ -42,10 +47,13 @@ import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.internal.TableImpl;
 import org.apache.flink.types.Row;
 
+import com.esotericsoftware.kryo.Kryo;
+import com.esotericsoftware.kryo.io.Output;
 import org.apache.commons.collections.IteratorUtils;
 import org.apache.commons.lang3.ArrayUtils;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -176,9 +184,27 @@ public class KMeansModel implements Model<KMeansModel>, KMeansParams<KMeansModel
         }
     }
 
+    private static class RowEncoder implements Encoder<Row> {
+        @Override
+        public void encode(Row row, OutputStream outputStream) throws IOException {
+            System.out.println("flag.........encoder " + row);
+            Kryo kryo = new Kryo();
+            Output output = new Output(outputStream);
+            kryo.writeObject(output, row);
+            output.flush();
+        }
+    }
+
     @Override
     public void save(String path) throws IOException {
-        // TODO: save model data.
+        StreamTableEnvironment tEnv =
+                (StreamTableEnvironment) ((TableImpl) centroidsTable).getTableEnvironment();
+        FileSink<Row> sink =
+                FileSink.forRowFormat(new Path(path), new RowEncoder())
+                        .withRollingPolicy(OnCheckpointRollingPolicy.build())
+                        .withBucketAssigner(new BasePathBucketAssigner<>())
+                        .build();
+        tEnv.toDataStream(centroidsTable).sinkTo(sink);
         ReadWriteUtils.saveMetadata(this, path);
     }
 

@@ -22,7 +22,7 @@ import java.util.Arrays;
 
 /** A dense vector of double values. */
 public class DenseVector implements Vector {
-    public final double[] values;
+    public double[] values;
 
     public DenseVector(double[] values) {
         this.values = values;

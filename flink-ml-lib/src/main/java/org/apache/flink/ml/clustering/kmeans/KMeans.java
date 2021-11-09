@@ -112,7 +112,7 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
 
         Schema schema =
                 Schema.newBuilder()
-                        .column("f0", DataTypes.ARRAY(DataTypes.RAW(DenseVector.class)))
+                        .column("f0", DataTypes.ARRAY(DataTypes.of(DenseVector.class)))
                         .columnByMetadata("rowtime", "TIMESTAMP_LTZ(3)")
                         .build();
         Table finalCentroidsTable = tEnv.fromDataStream(finalCentroids, schema);
