@@ -19,7 +19,6 @@
 package org.apache.flink.ml.clustering;
 
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
-import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.serialization.Encoder;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.connector.source.Source;
@@ -47,8 +46,6 @@ import org.apache.flink.types.Row;
 import com.esotericsoftware.kryo.Kryo;
 import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
-import org.apache.commons.collections.IteratorUtils;
-import org.junit.Assert;
 import org.junit.Test;
 
 import java.io.File;
@@ -187,35 +184,7 @@ public class KMeansTest extends AbstractTestBase {
         System.out.println("Use temp directory " + tempDir);
         model.save(tempDir);
 
-        Table output = model.transform(data)[0];
-
-        DataStream<Tuple2<DenseVector, Integer>> pointsWithClusterId =
-                tEnv.toDataStream(output)
-                        .map(
-                                new MapFunction<Row, Tuple2<DenseVector, Integer>>() {
-                                    @Override
-                                    public Tuple2<DenseVector, Integer> map(Row row) {
-                                        return Tuple2.of(
-                                                (DenseVector) row.getField(kmeans.getFeaturesCol()),
-                                                (Integer) row.getField(kmeans.getPredictionCol()));
-                                    }
-                                });
-
-        List<Tuple2<DenseVector, Integer>> pointsWithClusterIdList =
-                IteratorUtils.toList(pointsWithClusterId.executeAndCollect());
-        System.out.println("pointsWithClusterId size " + pointsWithClusterIdList.size());
-        System.out.println("pointsWithClusterId " + pointsWithClusterIdList);
-
-        Assert.assertEquals(pointsWithClusterIdList.size(), KMeansData.POINTS.length);
-        pointsWithClusterIdList.stream()
-                .map(t -> t.f1)
-                .forEach(
-                        clusterId ->
-                                Assert.assertTrue(clusterId >= 0 && clusterId < kmeans.getK()));
-
-        DistanceMeasure distanceMeasure = DistanceMeasure.getInstance(model.getDistanceMeasure());
-        double loss = computeCost(pointsWithClusterIdList, distanceMeasure);
-        System.out.println("Loss " + loss);
+        env.execute();
     }
 
     private static double computeCost(
