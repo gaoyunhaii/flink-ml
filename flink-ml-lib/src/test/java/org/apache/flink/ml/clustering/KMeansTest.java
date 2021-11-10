@@ -38,6 +38,8 @@ import org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.filesystem.bucketassigners.BasePathBucketAssigner;
 import org.apache.flink.streaming.api.functions.sink.filesystem.rollingpolicies.OnCheckpointRollingPolicy;
+import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.Table;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.test.util.AbstractTestBase;
@@ -162,6 +164,28 @@ public class KMeansTest extends AbstractTestBase {
         DataStream<Integer> input =
                 env.fromSource(source, WatermarkStrategy.noWatermarks(), "input");
         input.print();
+
+        env.execute();
+    }
+
+    @Test
+    public void testCheckpointWithMetadata() throws Exception {
+        Configuration config = new Configuration();
+        config.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setParallelism(1);
+        env.enableCheckpointing(100);
+
+        StreamTableEnvironment tEnv = StreamTableEnvironment.create(env);
+
+        Schema schema =
+                Schema.newBuilder()
+                        .column("f0", DataTypes.of(Integer.class))
+                        .columnByMetadata("rowtime", "TIMESTAMP_LTZ(3)")
+                        .build();
+
+        Table data = tEnv.fromDataStream(env.fromCollection(Arrays.asList(1, 2, 3)), schema);
+        tEnv.toDataStream(data).print();
 
         env.execute();
     }
