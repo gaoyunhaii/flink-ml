@@ -180,9 +180,7 @@ public class KMeansTest extends AbstractTestBase {
         KMeans kmeans = new KMeans().setMaxIter(10).setK(2);
         KMeansModel model = kmeans.fit(data);
 
-        String tempDir = Files.createTempDirectory("").toString();
-        System.out.println("Use temp directory " + tempDir);
-        model.save(tempDir);
+        System.out.println("flag......execute");
 
         env.execute();
     }

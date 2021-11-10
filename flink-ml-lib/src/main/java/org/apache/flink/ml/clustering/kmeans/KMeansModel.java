@@ -204,7 +204,7 @@ public class KMeansModel implements Model<KMeansModel>, KMeansParams<KMeansModel
                         .withRollingPolicy(OnCheckpointRollingPolicy.build())
                         .withBucketAssigner(new BasePathBucketAssigner<>())
                         .build();
-        tEnv.toDataStream(centroidsTable).sinkTo(sink);
+        //        tEnv.toDataStream(centroidsTable).sinkTo(sink);
         ReadWriteUtils.saveMetadata(this, path);
     }
 

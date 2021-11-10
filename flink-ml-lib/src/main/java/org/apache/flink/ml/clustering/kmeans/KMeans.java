@@ -54,8 +54,6 @@ import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.flink.table.api.DataTypes;
-import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.Table;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.internal.TableImpl;
@@ -110,18 +108,7 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
                                 body)
                         .get(0);
 
-        Schema schema =
-                Schema.newBuilder()
-                        .column("f0", DataTypes.ARRAY(DataTypes.of(DenseVector.class)))
-                        .columnByMetadata("rowtime", "TIMESTAMP_LTZ(3)")
-                        .build();
-        Table finalCentroidsTable = tEnv.fromDataStream(finalCentroids, schema);
-
-        KMeansModel model = new KMeansModel();
-        model.setModelData(finalCentroidsTable);
-        ReadWriteUtils.setStageParams(model, paramMap);
-
-        return model;
+        return null;
     }
 
     @Override
