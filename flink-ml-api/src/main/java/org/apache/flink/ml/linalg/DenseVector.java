@@ -19,7 +19,6 @@
 package org.apache.flink.ml.linalg;
 
 import java.util.Arrays;
-import java.util.Objects;
 
 /** A dense vector of double values. */
 public class DenseVector implements Vector {
@@ -51,7 +50,7 @@ public class DenseVector implements Vector {
 
     @Override
     public boolean equals(Object obj) {
-        if (!(obj instanceof  DenseVector)) {
+        if (!(obj instanceof DenseVector)) {
             return false;
         }
         return Arrays.equals(values, ((DenseVector) obj).values);

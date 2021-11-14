@@ -18,9 +18,11 @@
 
 package org.apache.flink.ml.clustering.kmeans;
 
+import org.apache.flink.api.common.functions.AbstractRichFunction;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.MapPartitionFunction;
 import org.apache.flink.api.common.functions.ReduceFunction;
+import org.apache.flink.api.common.functions.RichFunction;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
@@ -37,6 +39,7 @@ import org.apache.flink.iteration.IterationListener;
 import org.apache.flink.iteration.Iterations;
 import org.apache.flink.iteration.ReplayableDataStreamList;
 import org.apache.flink.ml.api.core.Estimator;
+import org.apache.flink.ml.common.broadcast.BroadcastUtils;
 import org.apache.flink.ml.common.datastream.EndOfStreamWindows;
 import org.apache.flink.ml.common.datastream.MapPartitionFunctionWrapper;
 import org.apache.flink.ml.common.iteration.ForwardInputsOfLastRound;
@@ -49,9 +52,8 @@ import org.apache.flink.ml.util.ReadWriteUtils;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.functions.windowing.AllWindowFunction;
-import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
+import org.apache.flink.streaming.api.operators.AbstractUdfStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
-import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.table.api.Table;
@@ -63,11 +65,13 @@ import org.apache.commons.collections.IteratorUtils;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.function.Function;
 
 /**
  * An Estimator which implements the k-means clustering algorithm.
@@ -147,14 +151,32 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
             DataStream<Integer> terminationCriteria =
                     centroids.flatMap(new TerminateOnMaxIterationNum<>(maxIterationNum));
 
+            Map<String, DataStream<?>> bcStreams = new HashMap<>();
+            bcStreams.put("centroids", centroids);
+
+            Function<List<DataStream<?>>, DataStream<Tuple2<Integer, DenseVector>>> func =
+                    inputs -> {
+                        DataStream<DenseVector> input = (DataStream<DenseVector>) inputs.get(0);
+                        return input.transform(
+                                "SelectNearestCentroid",
+                                new TupleTypeInfo<>(
+                                        BasicTypeInfo.INT_TYPE_INFO,
+                                        TypeInformation.of(DenseVector.class)),
+                                new SelectNearestCentroidOperator(distanceMeasure));
+                    };
+
             DataStream<Tuple2<Integer, DenseVector>> centroidIdAndPoints =
-                    points.connect(centroids.broadcast())
-                            .transform(
-                                    "SelectNearestCentroid",
-                                    new TupleTypeInfo<>(
-                                            BasicTypeInfo.INT_TYPE_INFO,
-                                            TypeInformation.of(DenseVector.class)),
-                                    new SelectNearestCentroidOperator(distanceMeasure));
+                    BroadcastUtils.withBroadcastStream(Arrays.asList(points), bcStreams, func);
+
+            //            DataStream<Tuple2<Integer, DenseVector>> centroidIdAndPoints =
+            //                    points.connect(centroids.broadcast())
+            //                            .transform(
+            //                                    "SelectNearestCentroid",
+            //                                    new TupleTypeInfo<>(
+            //                                            BasicTypeInfo.INT_TYPE_INFO,
+            //                                            TypeInformation.of(DenseVector.class)),
+            //                                    new
+            // SelectNearestCentroidOperator(distanceMeasure));
 
             AllWindowFunction<DenseVector, DenseVector[], TimeWindow> toList =
                     new AllWindowFunction<DenseVector, DenseVector[], TimeWindow>() {
@@ -235,16 +257,14 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
     }
 
     private static class SelectNearestCentroidOperator
-            extends AbstractStreamOperator<Tuple2<Integer, DenseVector>>
-            implements TwoInputStreamOperator<
-                            DenseVector, DenseVector[], Tuple2<Integer, DenseVector>>,
+            extends AbstractUdfStreamOperator<Tuple2<Integer, DenseVector>, RichFunction>
+            implements OneInputStreamOperator<DenseVector, Tuple2<Integer, DenseVector>>,
                     IterationListener<Tuple2<Integer, DenseVector>> {
         private final DistanceMeasure distanceMeasure;
         private ListState<DenseVector> points;
-        // TODO: use broadcast state here.
-        private ListState<DenseVector[]> centroids;
 
         public SelectNearestCentroidOperator(DistanceMeasure distanceMeasure) {
+            super(new AbstractRichFunction() {});
             this.distanceMeasure = distanceMeasure;
         }
 
@@ -254,22 +274,11 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
             points =
                     context.getOperatorStateStore()
                             .getListState(new ListStateDescriptor<>("points", DenseVector.class));
-
-            TypeInformation<DenseVector[]> type =
-                    ObjectArrayTypeInfo.getInfoFor(TypeInformation.of(DenseVector.class));
-            centroids =
-                    context.getOperatorStateStore()
-                            .getListState(new ListStateDescriptor<>("centroids", type));
         }
 
         @Override
-        public void processElement1(StreamRecord<DenseVector> streamRecord) throws Exception {
+        public void processElement(StreamRecord<DenseVector> streamRecord) throws Exception {
             points.add(streamRecord.getValue());
-        }
-
-        @Override
-        public void processElement2(StreamRecord<DenseVector[]> streamRecord) throws Exception {
-            centroids.add(streamRecord.getValue());
         }
 
         @Override
@@ -277,7 +286,8 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
                 int epochWatermark, Context context, Collector<Tuple2<Integer, DenseVector>> out) {
             // TODO: update onEpochWatermarkIncremented to throw Exception.
             try {
-                List<DenseVector[]> list = IteratorUtils.toList(centroids.get().iterator());
+                List<DenseVector[]> list =
+                        userFunction.getRuntimeContext().getBroadcastVariable("centroids");
                 if (list.size() != 1) {
                     throw new RuntimeException(
                             "The operator received "
@@ -298,10 +308,8 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
                             closestCentroidId = i;
                         }
                     }
-
                     output.collect(new StreamRecord<>(Tuple2.of(closestCentroidId, point)));
                 }
-                centroids.clear();
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
