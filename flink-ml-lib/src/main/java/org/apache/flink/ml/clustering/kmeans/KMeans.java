@@ -18,6 +18,7 @@
 
 package org.apache.flink.ml.clustering.kmeans;
 
+import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.functions.AbstractRichFunction;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.MapPartitionFunction;
@@ -273,7 +274,11 @@ public class KMeans implements Estimator<KMeans, KMeansModel>, KMeansParams<KMea
             super.initializeState(context);
             points =
                     context.getOperatorStateStore()
-                            .getListState(new ListStateDescriptor<>("points", DenseVector.class));
+                            .getListState(
+                                    new ListStateDescriptor<>(
+                                            "points",
+                                            TypeInformation.of(DenseVector.class)
+                                                    .createSerializer(new ExecutionConfig())));
         }
 
         @Override
