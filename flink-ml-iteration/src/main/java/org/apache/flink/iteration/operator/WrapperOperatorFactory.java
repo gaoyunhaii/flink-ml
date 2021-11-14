@@ -48,7 +48,7 @@ public class WrapperOperatorFactory<OUT>
 
     @Override
     public Class<? extends StreamOperator> getStreamOperatorClass(ClassLoader classLoader) {
-        return AbstractWrapperOperator.class;
+        return operatorFactory.getStreamOperatorClass(classLoader);
     }
 
     @VisibleForTesting
