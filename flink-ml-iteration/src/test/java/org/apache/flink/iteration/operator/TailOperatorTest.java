@@ -23,7 +23,6 @@ import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.runtime.testutils.DirectScheduledExecutorService;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannelBroker;
-import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
 import org.apache.flink.util.TestLogger;
 
@@ -50,13 +49,12 @@ public class TailOperatorTest extends TestLogger {
         testHarness.processElement(IterationRecord.newRecord(2, 1), 3);
         testHarness.processElement(IterationRecord.newEpochWatermark(2, "sender1"), 4);
 
-        List<StreamRecord<IterationRecord<?>>> iterationRecords =
-                getFeedbackRecords(iterationId, 0, 0, 0);
+        List<IterationRecord<?>> iterationRecords = getFeedbackRecords(iterationId, 0, 0, 0);
         assertEquals(
                 Arrays.asList(
-                        new StreamRecord<>(IterationRecord.newRecord(1, 2), 2),
-                        new StreamRecord<>(IterationRecord.newRecord(2, 2), 3),
-                        new StreamRecord<>(IterationRecord.newEpochWatermark(3, "sender1"), 4)),
+                        IterationRecord.newRecord(1, 2),
+                        IterationRecord.newRecord(2, 2),
+                        IterationRecord.newEpochWatermark(3, "sender1")),
                 iterationRecords);
     }
 
@@ -80,25 +78,24 @@ public class TailOperatorTest extends TestLogger {
         reuse.setSender("sender1");
         testHarness.processElement(reuse, 4);
 
-        List<StreamRecord<IterationRecord<?>>> iterationRecords =
-                getFeedbackRecords(iterationId, 0, 0, 0);
+        List<IterationRecord<?>> iterationRecords = getFeedbackRecords(iterationId, 0, 0, 0);
         assertEquals(
                 Arrays.asList(
-                        new StreamRecord<>(IterationRecord.newRecord(1, 2), 2),
-                        new StreamRecord<>(IterationRecord.newRecord(2, 2), 3),
-                        new StreamRecord<>(IterationRecord.newEpochWatermark(3, "sender1"), 4)),
+                        IterationRecord.newRecord(1, 2),
+                        IterationRecord.newRecord(2, 2),
+                        IterationRecord.newEpochWatermark(3, "sender1")),
                 iterationRecords);
     }
 
-    static List<StreamRecord<IterationRecord<?>>> getFeedbackRecords(
+    static List<IterationRecord<?>> getFeedbackRecords(
             IterationID iterationId, int feedbackIndex, int subtaskIndex, int attemptNumber) {
-        FeedbackChannel<StreamRecord<IterationRecord<?>>> feedbackChannel =
+        FeedbackChannel<IterationRecord<?>> feedbackChannel =
                 FeedbackChannelBroker.get()
                         .getChannel(
-                                OperatorUtils.<StreamRecord<IterationRecord<?>>>createFeedbackKey(
+                                OperatorUtils.<IterationRecord<?>>createFeedbackKey(
                                                 iterationId, feedbackIndex)
                                         .withSubTaskIndex(subtaskIndex, attemptNumber));
-        List<StreamRecord<IterationRecord<?>>> iterationRecords = new ArrayList<>();
+        List<IterationRecord<?>> iterationRecords = new ArrayList<>();
         OperatorUtils.registerFeedbackConsumer(
                 feedbackChannel, iterationRecords::add, new DirectScheduledExecutorService());
         return iterationRecords;

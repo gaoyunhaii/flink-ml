@@ -49,9 +49,9 @@ public class TailOperator extends AbstractStreamOperator<Void>
     private final int feedbackIndex;
 
     /** We distinguish how the record is processed according to if objectReuse is enabled. */
-    private transient Consumer<StreamRecord<IterationRecord<?>>> recordConsumer;
+    private transient Consumer<IterationRecord<?>> recordConsumer;
 
-    private transient FeedbackChannel<StreamRecord<IterationRecord<?>>> channel;
+    private transient FeedbackChannel<IterationRecord<?>> channel;
 
     public TailOperator(IterationID iterationId, int feedbackIndex) {
         this.iterationId = Objects.requireNonNull(iterationId);
@@ -73,9 +73,9 @@ public class TailOperator extends AbstractStreamOperator<Void>
         int indexOfThisSubtask = getRuntimeContext().getIndexOfThisSubtask();
         int attemptNum = getRuntimeContext().getAttemptNumber();
 
-        FeedbackKey<StreamRecord<IterationRecord<?>>> feedbackKey =
+        FeedbackKey<IterationRecord<?>> feedbackKey =
                 OperatorUtils.createFeedbackKey(iterationId, feedbackIndex);
-        SubtaskFeedbackKey<StreamRecord<IterationRecord<?>>> key =
+        SubtaskFeedbackKey<IterationRecord<?>> key =
                 feedbackKey.withSubTaskIndex(indexOfThisSubtask, attemptNum);
 
         FeedbackChannelBroker broker = FeedbackChannelBroker.get();
@@ -89,13 +89,13 @@ public class TailOperator extends AbstractStreamOperator<Void>
 
     @Override
     public void processElement(StreamRecord<IterationRecord<?>> streamRecord) {
-        recordConsumer.accept(streamRecord);
+        recordConsumer.accept(streamRecord.getValue());
     }
 
     @Override
     public void prepareSnapshotPreBarrier(long checkpointId) throws Exception {
         super.prepareSnapshotPreBarrier(checkpointId);
-        channel.put(new StreamRecord<>(IterationRecord.newBarrier(checkpointId)));
+        channel.put(IterationRecord.newBarrier(checkpointId));
     }
 
     @Override
@@ -117,17 +117,17 @@ public class TailOperator extends AbstractStreamOperator<Void>
         }
     }
 
-    private void processIfObjectReuseEnabled(StreamRecord<IterationRecord<?>> record) {
+    private void processIfObjectReuseEnabled(IterationRecord<?> record) {
         // Since the record would be reused, we have to clone a new one
-        IterationRecord<?> cloned = record.getValue().clone();
+        IterationRecord<?> cloned = record.clone();
         cloned.incrementEpoch();
-        channel.put(new StreamRecord<>(cloned, record.getTimestamp()));
+        channel.put(cloned);
     }
 
-    private void processIfObjectReuseNotEnabled(StreamRecord<IterationRecord<?>> record) {
+    private void processIfObjectReuseNotEnabled(IterationRecord<?> record) {
         // Since the record would not be reused, we could modify it in place.
-        record.getValue().incrementEpoch();
-        channel.put(new StreamRecord<>(record.getValue(), record.getTimestamp()));
+        record.incrementEpoch();
+        channel.put(record);
     }
 
     @Override

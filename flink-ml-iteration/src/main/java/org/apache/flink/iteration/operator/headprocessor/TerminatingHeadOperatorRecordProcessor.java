@@ -49,9 +49,9 @@ public class TerminatingHeadOperatorRecordProcessor implements HeadOperatorRecor
     }
 
     @Override
-    public boolean processFeedbackElement(StreamRecord<IterationRecord<?>> record) {
-        if (record.getValue().getType() == IterationRecord.Type.EPOCH_WATERMARK) {
-            return record.getValue().getEpoch() == Integer.MAX_VALUE + 1;
+    public boolean processFeedbackElement(IterationRecord<?> record) {
+        if (record.getType() == IterationRecord.Type.EPOCH_WATERMARK) {
+            return record.getEpoch() == Integer.MAX_VALUE + 1;
         }
 
         return false;

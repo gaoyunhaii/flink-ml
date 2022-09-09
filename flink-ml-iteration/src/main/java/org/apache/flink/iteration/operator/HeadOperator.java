@@ -110,7 +110,7 @@ import static org.apache.flink.util.Preconditions.checkState;
  */
 public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         implements OneInputStreamOperator<IterationRecord<?>, IterationRecord<?>>,
-                FeedbackConsumer<StreamRecord<IterationRecord<?>>>,
+                FeedbackConsumer<IterationRecord<?>>,
                 OperatorEventHandler,
                 BoundedOneInput {
 
@@ -256,8 +256,7 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
                 DataCacheSnapshot.replay(
                         rawStateInput.getStream(),
                         checkpoints.getTypeSerializer(),
-                        (record) ->
-                                recordProcessor.processFeedbackElement(new StreamRecord<>(record)));
+                        (record) -> recordProcessor.processFeedbackElement(record));
             }
         } catch (Exception e) {
             throw new FlinkRuntimeException("Failed to replay the records", e);
@@ -319,13 +318,13 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     }
 
     @Override
-    public void processFeedback(StreamRecord<IterationRecord<?>> iterationRecord) throws Exception {
-        if (iterationRecord.getValue().getType() == IterationRecord.Type.BARRIER) {
-            checkpoints.commitCheckpointsUntil(iterationRecord.getValue().getCheckpointId());
+    public void processFeedback(IterationRecord<?> iterationRecord) throws Exception {
+        if (iterationRecord.getType() == IterationRecord.Type.BARRIER) {
+            checkpoints.commitCheckpointsUntil(iterationRecord.getCheckpointId());
             return;
         }
 
-        checkpoints.append(iterationRecord.getValue());
+        checkpoints.append(iterationRecord);
         boolean terminated = recordProcessor.processFeedbackElement(iterationRecord);
         if (terminated) {
             checkState(status == HeadOperatorStatus.TERMINATING);
@@ -418,12 +417,12 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     private void registerFeedbackConsumer(Executor mailboxExecutor) {
         int indexOfThisSubtask = getRuntimeContext().getIndexOfThisSubtask();
         int attemptNum = getRuntimeContext().getAttemptNumber();
-        FeedbackKey<StreamRecord<IterationRecord<?>>> feedbackKey =
+        FeedbackKey<IterationRecord<?>> feedbackKey =
                 OperatorUtils.createFeedbackKey(iterationId, feedbackIndex);
-        SubtaskFeedbackKey<StreamRecord<IterationRecord<?>>> key =
+        SubtaskFeedbackKey<IterationRecord<?>> key =
                 feedbackKey.withSubTaskIndex(indexOfThisSubtask, attemptNum);
         FeedbackChannelBroker broker = FeedbackChannelBroker.get();
-        FeedbackChannel<StreamRecord<IterationRecord<?>>> channel = broker.getChannel(key);
+        FeedbackChannel<IterationRecord<?>> channel = broker.getChannel(key);
         OperatorUtils.registerFeedbackConsumer(channel, this, mailboxExecutor);
     }
 
@@ -507,6 +506,8 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
 
     private class ContextImpl implements HeadOperatorRecordProcessor.Context {
 
+        private StreamRecord<IterationRecord<?>> reuse = new StreamRecord<>(null);
+
         @Override
         public StreamConfig getStreamConfig() {
             return HeadOperator.this.config;
@@ -518,8 +519,9 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         }
 
         @Override
-        public void output(StreamRecord<IterationRecord<?>> record) {
-            output.collect(record);
+        public void output(IterationRecord<?> record) {
+            reuse.replace(record, 0);
+            output.collect(reuse);
         }
 
         @Override

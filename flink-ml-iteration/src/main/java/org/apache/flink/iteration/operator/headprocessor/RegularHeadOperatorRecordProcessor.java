@@ -87,17 +87,17 @@ public class RegularHeadOperatorRecordProcessor implements HeadOperatorRecordPro
 
     @Override
     public void processElement(StreamRecord<IterationRecord<?>> element) {
-        processRecord(element);
+        processRecord(element.getValue());
     }
 
     @Override
-    public boolean processFeedbackElement(StreamRecord<IterationRecord<?>> element) {
-        if (element.getValue().getType() == IterationRecord.Type.RECORD) {
+    public boolean processFeedbackElement(IterationRecord<?> iterationRecord) {
+        if (iterationRecord.getType() == IterationRecord.Type.RECORD) {
             numFeedbackRecordsPerEpoch.compute(
-                    element.getValue().getEpoch(), (epoch, count) -> count == null ? 1 : count + 1);
+                    iterationRecord.getEpoch(), (epoch, count) -> count == null ? 1 : count + 1);
         }
 
-        processRecord(element);
+        processRecord(iterationRecord);
 
         return false;
     }
@@ -150,40 +150,39 @@ public class RegularHeadOperatorRecordProcessor implements HeadOperatorRecordPro
         return latestRoundGloballyAligned;
     }
 
-    private void processRecord(StreamRecord<IterationRecord<?>> iterationRecord) {
-        switch (iterationRecord.getValue().getType()) {
+    private void processRecord(IterationRecord<?> iterationRecord) {
+        switch (iterationRecord.getType()) {
             case RECORD:
                 headOperatorContext.output(iterationRecord);
                 break;
             case EPOCH_WATERMARK:
-                LOG.info("Head Received epoch watermark {}", iterationRecord.getValue().getEpoch());
+                LOG.info("Head Received epoch watermark {}", iterationRecord.getEpoch());
 
                 boolean needNotifyCoordinator = false;
-                if (iterationRecord.getValue().getEpoch() == 0) {
+                if (iterationRecord.getEpoch() == 0) {
                     if (latestRoundAligned <= 0) {
                         needNotifyCoordinator = true;
                     }
                 } else {
                     checkState(
-                            iterationRecord.getValue().getEpoch() > latestRoundAligned,
+                            iterationRecord.getEpoch() > latestRoundAligned,
                             String.format(
                                     "Unexpected epoch watermark: latest = %d, this one = %d",
-                                    latestRoundAligned, iterationRecord.getValue().getEpoch()));
+                                    latestRoundAligned, iterationRecord.getEpoch()));
                     headOperatorContext.updateEpochToCoordinator(
-                            iterationRecord.getValue().getEpoch(),
+                            iterationRecord.getEpoch(),
                             numFeedbackRecordsPerEpoch.getOrDefault(
-                                    iterationRecord.getValue().getEpoch(), 0L));
+                                    iterationRecord.getEpoch(), 0L));
                 }
 
                 if (needNotifyCoordinator) {
                     headOperatorContext.updateEpochToCoordinator(
-                            iterationRecord.getValue().getEpoch(),
+                            iterationRecord.getEpoch(),
                             numFeedbackRecordsPerEpoch.getOrDefault(
-                                    iterationRecord.getValue().getEpoch(), 0L));
+                                    iterationRecord.getEpoch(), 0L));
                 }
 
-                latestRoundAligned =
-                        Math.max(iterationRecord.getValue().getEpoch(), latestRoundAligned);
+                latestRoundAligned = Math.max(iterationRecord.getEpoch(), latestRoundAligned);
                 break;
         }
     }

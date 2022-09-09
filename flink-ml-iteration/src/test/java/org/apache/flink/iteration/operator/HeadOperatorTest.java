@@ -95,10 +95,10 @@ public class HeadOperatorTest extends TestLogger {
 
                     List<StreamRecord<IterationRecord<Integer>>> expectedOutput =
                             Arrays.asList(
-                                    new StreamRecord<>(IterationRecord.newRecord(1, 0), 2),
-                                    new StreamRecord<>(IterationRecord.newRecord(3, 1), 3),
-                                    new StreamRecord<>(IterationRecord.newRecord(2, 0), 3),
-                                    new StreamRecord<>(IterationRecord.newRecord(4, 1), 4));
+                                    new StreamRecord<>(IterationRecord.newRecord(1, 0), 0),
+                                    new StreamRecord<>(IterationRecord.newRecord(3, 1), 0),
+                                    new StreamRecord<>(IterationRecord.newRecord(2, 0), 0),
+                                    new StreamRecord<>(IterationRecord.newRecord(4, 1), 0));
                     assertEquals(expectedOutput, new ArrayList<>(harness.getOutput()));
 
                     RegularHeadOperatorRecordProcessor recordProcessor =
@@ -195,13 +195,13 @@ public class HeadOperatorTest extends TestLogger {
 
                     assertEquals(
                             Arrays.asList(
-                                    new StreamRecord<>(IterationRecord.newRecord(1, 0), 2),
+                                    new StreamRecord<>(IterationRecord.newRecord(1, 0), 0),
                                     new StreamRecord<>(
                                             IterationRecord.newEpochWatermark(
                                                     0,
                                                     OperatorUtils.getUniqueSenderId(operatorId, 0)),
                                             0),
-                                    new StreamRecord<>(IterationRecord.newRecord(4, 1), 4),
+                                    new StreamRecord<>(IterationRecord.newRecord(4, 1), 0),
                                     new StreamRecord<>(
                                             IterationRecord.newEpochWatermark(
                                                     Integer.MAX_VALUE,
@@ -564,9 +564,9 @@ public class HeadOperatorTest extends TestLogger {
                             harness,
                             HeadOperator.HeadOperatorStatus.RUNNING,
                             Arrays.asList(
-                                    new StreamRecord<>(IterationRecord.newRecord(101, 5)),
-                                    new StreamRecord<>(IterationRecord.newRecord(102, 5)),
-                                    new StreamRecord<>(IterationRecord.newRecord(103, 6))),
+                                    new StreamRecord<>(IterationRecord.newRecord(101, 5), 0),
+                                    new StreamRecord<>(IterationRecord.newRecord(102, 5), 0),
+                                    new StreamRecord<>(IterationRecord.newRecord(103, 6), 0)),
                             /* The one before checkpoint and the two after checkpoint */
                             Collections.singletonList(new SubtaskAlignedEvent(5, 3, false)),
                             new HashMap<Integer, Long>() {
@@ -847,16 +847,12 @@ public class HeadOperatorTest extends TestLogger {
 
     private static void putFeedbackRecords(
             IterationID iterationId, IterationRecord<?> record, @Nullable Long timestamp) {
-        FeedbackChannel<StreamRecord<IterationRecord<?>>> feedbackChannel =
+        FeedbackChannel<IterationRecord<?>> feedbackChannel =
                 FeedbackChannelBroker.get()
                         .getChannel(
-                                OperatorUtils.<StreamRecord<IterationRecord<?>>>createFeedbackKey(
-                                                iterationId, 0)
+                                OperatorUtils.<IterationRecord<?>>createFeedbackKey(iterationId, 0)
                                         .withSubTaskIndex(0, 0));
-        feedbackChannel.put(
-                timestamp == null
-                        ? new StreamRecord<>(record)
-                        : new StreamRecord<>(record, timestamp));
+        feedbackChannel.put(record);
     }
 
     private static void checkRestoredOperatorState(

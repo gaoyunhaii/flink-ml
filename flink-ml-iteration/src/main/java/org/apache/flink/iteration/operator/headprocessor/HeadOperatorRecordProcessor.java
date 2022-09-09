@@ -37,7 +37,7 @@ public interface HeadOperatorRecordProcessor {
 
     void processElement(StreamRecord<IterationRecord<?>> record);
 
-    boolean processFeedbackElement(StreamRecord<IterationRecord<?>> record);
+    boolean processFeedbackElement(IterationRecord<?> record);
 
     boolean onGloballyAligned(GloballyAlignedEvent globallyAlignedEvent);
 
@@ -51,7 +51,7 @@ public interface HeadOperatorRecordProcessor {
 
         TaskInfo getTaskInfo();
 
-        void output(StreamRecord<IterationRecord<?>> record);
+        void output(IterationRecord<?> record);
 
         void output(
                 OutputTag<IterationRecord<?>> outputTag, StreamRecord<IterationRecord<?>> record);
