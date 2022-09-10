@@ -17,10 +17,11 @@
 
 package org.apache.flink.iteration;
 
+import java.io.Serializable;
 import java.util.Objects;
 
 /** The wrapper for the records in iterative stream. */
-public class IterationRecord<T> implements Cloneable {
+public class IterationRecord<T> implements Cloneable, Serializable {
 
     /** The type of iteration records. */
     public enum Type {

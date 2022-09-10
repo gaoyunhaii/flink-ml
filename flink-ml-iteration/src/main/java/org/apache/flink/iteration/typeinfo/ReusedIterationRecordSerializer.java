@@ -30,13 +30,16 @@ import org.apache.flink.iteration.IterationRecord;
 import java.io.IOException;
 import java.util.Objects;
 
-/** The type serializer for {@link IterationRecord}. */
-public class IterationRecordSerializer<T> extends TypeSerializer<IterationRecord<T>> {
+/** Reuse the wrapper. */
+public class ReusedIterationRecordSerializer<T> extends TypeSerializer<IterationRecord<T>> {
 
     private final TypeSerializer<T> innerSerializer;
 
-    public IterationRecordSerializer(TypeSerializer<T> innerSerializer) {
+    private final IterationRecord<T> reusedWrapper;
+
+    public ReusedIterationRecordSerializer(TypeSerializer<T> innerSerializer) {
         this.innerSerializer = innerSerializer;
+        this.reusedWrapper = IterationRecord.newRecord(null, 0);
     }
 
     public TypeSerializer<T> getInnerSerializer() {
@@ -50,7 +53,7 @@ public class IterationRecordSerializer<T> extends TypeSerializer<IterationRecord
 
     @Override
     public TypeSerializer<IterationRecord<T>> duplicate() {
-        return new IterationRecordSerializer<>(innerSerializer.duplicate());
+        return new ReusedIterationRecordSerializer<>(innerSerializer.duplicate());
     }
 
     @Override
@@ -128,16 +131,19 @@ public class IterationRecordSerializer<T> extends TypeSerializer<IterationRecord
         int type = source.readByte();
         int epoch = deserializeNumber(source);
 
-        switch (IterationRecord.Type.values()[type]) {
+        reusedWrapper.setType(IterationRecord.Type.values()[type]);
+        reusedWrapper.setEpoch(epoch);
+
+        switch (reusedWrapper.getType()) {
             case RECORD:
-                T value = innerSerializer.deserialize(source);
-                return IterationRecord.newRecord(value, epoch);
+                reusedWrapper.setValue(innerSerializer.deserialize(source));
+                return reusedWrapper;
             case EPOCH_WATERMARK:
-                String sender = StringSerializer.INSTANCE.deserialize(source);
-                return IterationRecord.newEpochWatermark(epoch, sender);
+                reusedWrapper.setSender(StringSerializer.INSTANCE.deserialize(source));
+                return reusedWrapper;
             case BARRIER:
-                long checkpointId = LongSerializer.INSTANCE.deserialize(source);
-                return IterationRecord.newBarrier(checkpointId);
+                reusedWrapper.setCheckpointId(LongSerializer.INSTANCE.deserialize(source));
+                return reusedWrapper;
             default:
                 throw new IOException("Unsupported mini-batch record type " + type);
         }
@@ -214,7 +220,7 @@ public class IterationRecordSerializer<T> extends TypeSerializer<IterationRecord
             return false;
         }
 
-        IterationRecordSerializer<?> that = (IterationRecordSerializer<?>) o;
+        ReusedIterationRecordSerializer<?> that = (ReusedIterationRecordSerializer<?>) o;
         return Objects.equals(innerSerializer, that.innerSerializer);
     }
 
@@ -225,16 +231,16 @@ public class IterationRecordSerializer<T> extends TypeSerializer<IterationRecord
 
     @Override
     public TypeSerializerSnapshot<IterationRecord<T>> snapshotConfiguration() {
-        return new IterationRecordTypeSerializerSnapshot<>();
+        return new ReusedIterationRecordTypeSerializerSnapshot<>();
     }
 
-    private static final class IterationRecordTypeSerializerSnapshot<T>
+    private static final class ReusedIterationRecordTypeSerializerSnapshot<T>
             extends CompositeTypeSerializerSnapshot<
-                    IterationRecord<T>, IterationRecordSerializer<T>> {
+                    IterationRecord<T>, ReusedIterationRecordSerializer<T>> {
 
         private static final int CURRENT_VERSION = 1;
 
-        public IterationRecordTypeSerializerSnapshot() {
+        public ReusedIterationRecordTypeSerializerSnapshot() {
             super(IterationRecordSerializer.class);
         }
 
@@ -245,15 +251,15 @@ public class IterationRecordSerializer<T> extends TypeSerializer<IterationRecord
 
         @Override
         protected TypeSerializer<?>[] getNestedSerializers(
-                IterationRecordSerializer<T> iterationRecordSerializer) {
+                ReusedIterationRecordSerializer<T> iterationRecordSerializer) {
             return new TypeSerializer[] {iterationRecordSerializer.getInnerSerializer()};
         }
 
         @Override
-        protected IterationRecordSerializer<T> createOuterSerializerWithNestedSerializers(
+        protected ReusedIterationRecordSerializer<T> createOuterSerializerWithNestedSerializers(
                 TypeSerializer<?>[] typeSerializers) {
             TypeSerializer<T> elementSerializer = (TypeSerializer<T>) typeSerializers[0];
-            return new IterationRecordSerializer<>(elementSerializer);
+            return new ReusedIterationRecordSerializer<>(elementSerializer);
         }
     }
 }

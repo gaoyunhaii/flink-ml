@@ -20,7 +20,7 @@ package org.apache.flink.iteration.proxy;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.iteration.IterationRecord;
-import org.apache.flink.iteration.typeinfo.IterationRecordSerializer;
+import org.apache.flink.iteration.typeinfo.ReusedIterationRecordSerializer;
 import org.apache.flink.iteration.utils.ReflectionUtils;
 import org.apache.flink.runtime.io.network.api.writer.SubtaskStateMapper;
 import org.apache.flink.runtime.plugable.SerializationDelegate;
@@ -79,8 +79,8 @@ public class ProxyStreamPartitioner<T> extends StreamPartitioner<IterationRecord
             StreamElementSerializer<IterationRecord<T>> streamElementSerializer =
                     ReflectionUtils.getFieldValue(
                             record, SerializationDelegate.class, "serializer");
-            IterationRecordSerializer<T> iterationRecordSerializer =
-                    (IterationRecordSerializer<T>)
+            ReusedIterationRecordSerializer<T> iterationRecordSerializer =
+                    (ReusedIterationRecordSerializer<T>)
                             streamElementSerializer.getContainedTypeSerializer();
             reuseDelegate =
                     new SerializationDelegate<>(

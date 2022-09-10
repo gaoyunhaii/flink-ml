@@ -32,7 +32,7 @@ import org.apache.flink.iteration.datacache.nonkeyed.DataCacheWriter;
 import org.apache.flink.iteration.progresstrack.OperatorEpochWatermarkTracker;
 import org.apache.flink.iteration.progresstrack.OperatorEpochWatermarkTrackerFactory;
 import org.apache.flink.iteration.progresstrack.OperatorEpochWatermarkTrackerListener;
-import org.apache.flink.iteration.typeinfo.IterationRecordSerializer;
+import org.apache.flink.iteration.typeinfo.ReusedIterationRecordSerializer;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StatePartitionStreamProvider;
 import org.apache.flink.runtime.state.StateSnapshotContext;
@@ -107,8 +107,8 @@ public class ReplayOperator<T> extends AbstractStreamOperator<IterationRecord<T>
                                     .getSpillingDirectoriesPaths());
             fileSystem = basePath.getFileSystem();
 
-            IterationRecordSerializer<T> iterationRecordSerializer =
-                    (IterationRecordSerializer)
+            ReusedIterationRecordSerializer<T> iterationRecordSerializer =
+                    (ReusedIterationRecordSerializer)
                             config.getTypeSerializerOut(getClass().getClassLoader());
             typeSerializer = iterationRecordSerializer.getInnerSerializer();
 
@@ -144,8 +144,7 @@ public class ReplayOperator<T> extends AbstractStreamOperator<IterationRecord<T>
 
         currentEpochState =
                 context.getOperatorStateStore()
-                        .getListState(
-                                new ListStateDescriptor<Integer>("epoch", IntSerializer.INSTANCE));
+                        .getListState(new ListStateDescriptor<>("epoch", IntSerializer.INSTANCE));
         OperatorStateUtils.getUniqueElement(currentEpochState, "epoch")
                 .ifPresent(epoch -> currentEpoch = epoch);
 

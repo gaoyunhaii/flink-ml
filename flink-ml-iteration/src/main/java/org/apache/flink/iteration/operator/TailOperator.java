@@ -81,10 +81,7 @@ public class TailOperator extends AbstractStreamOperator<Void>
         FeedbackChannelBroker broker = FeedbackChannelBroker.get();
         this.channel = broker.getChannel(key);
 
-        this.recordConsumer =
-                getExecutionConfig().isObjectReuseEnabled()
-                        ? this::processIfObjectReuseEnabled
-                        : this::processIfObjectReuseNotEnabled;
+        this.recordConsumer = this::processIfObjectReuseEnabled;
     }
 
     @Override
@@ -122,12 +119,6 @@ public class TailOperator extends AbstractStreamOperator<Void>
         IterationRecord<?> cloned = record.clone();
         cloned.incrementEpoch();
         channel.put(cloned);
-    }
-
-    private void processIfObjectReuseNotEnabled(IterationRecord<?> record) {
-        // Since the record would not be reused, we could modify it in place.
-        record.incrementEpoch();
-        channel.put(record);
     }
 
     @Override

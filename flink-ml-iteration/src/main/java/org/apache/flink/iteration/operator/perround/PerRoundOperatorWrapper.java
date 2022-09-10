@@ -92,11 +92,11 @@ public class PerRoundOperatorWrapper<T> implements OperatorWrapper<T, IterationR
     @Override
     public OutputTag<IterationRecord<T>> wrapOutputTag(OutputTag<T> outputTag) {
         return new OutputTag<>(
-                outputTag.getId(), new IterationRecordTypeInfo<>(outputTag.getTypeInfo()));
+                outputTag.getId(), new IterationRecordTypeInfo<>(outputTag.getTypeInfo(), true));
     }
 
     @Override
     public TypeInformation<IterationRecord<T>> getWrappedTypeInfo(TypeInformation<T> typeInfo) {
-        return new IterationRecordTypeInfo<>(typeInfo);
+        return new IterationRecordTypeInfo<>(typeInfo, true);
     }
 }

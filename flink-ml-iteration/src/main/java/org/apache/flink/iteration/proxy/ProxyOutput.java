@@ -72,7 +72,7 @@ public class ProxyOutput<T> implements Output<StreamRecord<T>> {
                                         new OutputTag<IterationRecord<?>>(
                                                 outputTag.getId(),
                                                 new IterationRecordTypeInfo(
-                                                        outputTag.getTypeInfo())),
+                                                        outputTag.getTypeInfo(), true)),
                                         new StreamRecord<>(IterationRecord.newRecord(null, 0))));
         sideOutputCache.cachedRecord.replace(
                 IterationRecord.newRecord(record.getValue(), contextRound), record.getTimestamp());

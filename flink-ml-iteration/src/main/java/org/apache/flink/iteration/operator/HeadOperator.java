@@ -115,7 +115,8 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
                 BoundedOneInput {
 
     public static final OutputTag<IterationRecord<Void>> ALIGN_NOTIFY_OUTPUT_TAG =
-            new OutputTag<>("aligned", new IterationRecordTypeInfo<>(BasicTypeInfo.VOID_TYPE_INFO));
+            new OutputTag<>(
+                    "aligned", new IterationRecordTypeInfo<>(BasicTypeInfo.VOID_TYPE_INFO, true));
 
     private final IterationID iterationId;
 

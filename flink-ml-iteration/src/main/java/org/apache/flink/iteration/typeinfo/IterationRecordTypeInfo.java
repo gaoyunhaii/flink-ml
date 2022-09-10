@@ -18,6 +18,7 @@
 
 package org.apache.flink.iteration.typeinfo;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
@@ -30,8 +31,16 @@ public class IterationRecordTypeInfo<T> extends TypeInformation<IterationRecord<
 
     private final TypeInformation<T> innerTypeInfo;
 
+    private final boolean reuseWrapper;
+
+    @VisibleForTesting
     public IterationRecordTypeInfo(TypeInformation<T> innerTypeInfo) {
+        this(innerTypeInfo, false);
+    }
+
+    public IterationRecordTypeInfo(TypeInformation<T> innerTypeInfo, boolean reuseWrapper) {
         this.innerTypeInfo = innerTypeInfo;
+        this.reuseWrapper = reuseWrapper;
     }
 
     public TypeInformation<T> getInnerTypeInfo() {
@@ -69,7 +78,9 @@ public class IterationRecordTypeInfo<T> extends TypeInformation<IterationRecord<
 
     @Override
     public TypeSerializer<IterationRecord<T>> createSerializer(ExecutionConfig config) {
-        return new IterationRecordSerializer<>(innerTypeInfo.createSerializer(config));
+        return reuseWrapper
+                ? new ReusedIterationRecordSerializer<>(innerTypeInfo.createSerializer(config))
+                : new IterationRecordSerializer<>(innerTypeInfo.createSerializer(config));
     }
 
     @Override

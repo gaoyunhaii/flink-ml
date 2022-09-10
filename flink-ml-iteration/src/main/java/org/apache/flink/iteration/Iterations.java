@@ -434,7 +434,8 @@ public class Iterations {
                                 dataStream
                                         .transform(
                                                 "input-" + dataStream.getTransformation().getName(),
-                                                new IterationRecordTypeInfo<>(dataStream.getType()),
+                                                new IterationRecordTypeInfo<>(
+                                                        dataStream.getType(), true),
                                                 new InputOperator())
                                         .setParallelism(dataStream.getParallelism())));
     }
@@ -476,7 +477,8 @@ public class Iterations {
                                 ((DataStream<IterationRecord<?>>) dataStream)
                                         .transform(
                                                 "tail-" + dataStream.getTransformation().getName(),
-                                                new IterationRecordTypeInfo(dataStream.getType()),
+                                                new IterationRecordTypeInfo(
+                                                        dataStream.getType(), true),
                                                 new TailOperator(iterationId, startIndex + index))
                                         .setParallelism(dataStream.getParallelism())));
     }
