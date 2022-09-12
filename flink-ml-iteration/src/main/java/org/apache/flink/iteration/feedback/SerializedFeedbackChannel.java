@@ -24,8 +24,6 @@ import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputSerializer;
 import org.apache.flink.iteration.feedback.disk.DiskQueue;
 import org.apache.flink.iteration.feedback.ring.RingQueue;
-import org.apache.flink.runtime.io.network.api.writer.RecordWriter;
-import org.apache.flink.runtime.plugable.SerializationDelegate;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackConsumer;
 
@@ -35,7 +33,6 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -78,12 +75,10 @@ public class SerializedFeedbackChannel<T> implements FeedbackChannel<T> {
 
     // ------------ producer state -----------------
 
-    @Nullable private Executor writerExecutor;
+    @Nullable private volatile Executor writerExecutor;
 
     // -----  serialization related ------------------
     private final DataOutputSerializer serializer;
-
-    private final SerializationDelegate<T> ioReadableWritable;
 
     // ------- queues & read views -------------------
 
@@ -111,7 +106,6 @@ public class SerializedFeedbackChannel<T> implements FeedbackChannel<T> {
         this.fileReadBuffer = ByteBuffer.allocate((int) config.getFileReadBufferSize().getBytes());
         this.flushExecutor = Executors.newSingleThreadExecutor();
 
-        this.ioReadableWritable = new SerializationDelegate<>(typeSerializer);
         this.serializer = new DataOutputSerializer(128);
 
         this.inMemQueue = new RingQueue(inMemoryBuffer);
@@ -123,8 +117,7 @@ public class SerializedFeedbackChannel<T> implements FeedbackChannel<T> {
     }
 
     public void put(T t) throws Exception {
-        ioReadableWritable.setInstance(t);
-        ByteBuffer serializedBuffer = RecordWriter.serializeRecord(serializer, ioReadableWritable);
+        ByteBuffer serializedBuffer = serializeRecord(t);
 
         if (serializedBuffer.remaining()
                 > Math.min(inMemQueue.getBuffer().capacity(), fileWriteBuffer.capacity())) {
@@ -148,7 +141,7 @@ public class SerializedFeedbackChannel<T> implements FeedbackChannel<T> {
                             fileWriteBuffer,
                             flushExecutor,
                             new Path(config.getBasePath(), UUID.randomUUID().toString() + ".spill")
-                                    .toString());
+                                    .getPath());
             currentDiskQueue.put(serializedBuffer);
         }
 
@@ -164,6 +157,12 @@ public class SerializedFeedbackChannel<T> implements FeedbackChannel<T> {
         }
     }
 
+    private ByteBuffer serializeRecord(T t) throws IOException {
+        serializer.setPositionUnsafe(0);
+        typeSerializer.serialize(t, serializer);
+        return serializer.wrapAsByteBuffer();
+    }
+
     public void registerConsumer(FeedbackConsumer<T> consumer, Executor executor) {
         ConsumerTask consumerTask = new ConsumerTask(executor, consumer);
 
@@ -173,7 +172,22 @@ public class SerializedFeedbackChannel<T> implements FeedbackChannel<T> {
         }
 
         // Try to drain the existing records
-        onConsumed(Collections.emptyList());
+        if (writerExecutor != null) {
+            writerExecutor.execute(
+                    () -> {
+                        if (!isReading && inMemQueue.getWrittenSize() > 0) {
+                            // If not reading and in-memory queue is not empty, we need to drain the
+                            // in-memory
+                            // queue.
+                            // We do not notify on-disk queue here. It could be reading only after
+                            // the memory is
+                            // drained.
+                            pendingReadViews.add(inMemQueue.getReadView());
+                            consumerRef.get().drain();
+                            isReading = true;
+                        }
+                    });
+        }
     }
 
     public void close() {
@@ -181,10 +195,7 @@ public class SerializedFeedbackChannel<T> implements FeedbackChannel<T> {
     }
 
     private void onConsumed(List<ReadView> consumed) {
-        if (writerExecutor == null) {
-            return;
-        }
-
+        checkState(writerExecutor != null);
         writerExecutor.execute(
                 () -> {
                     try {

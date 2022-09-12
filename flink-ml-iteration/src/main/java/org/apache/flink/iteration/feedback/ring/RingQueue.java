@@ -140,13 +140,25 @@ public class RingQueue {
 
         private ByteBuffer[] toBuffers() {
             if (start <= endExclusive) {
-                return new ByteBuffer[] {ByteBuffer.wrap(buffer.array(), start, endExclusive)};
+                return new ByteBuffer[] {
+                    ByteBuffer.wrap(buffer.array(), start, endExclusive - start)
+                };
             } else {
                 return new ByteBuffer[] {
-                    ByteBuffer.wrap(buffer.array(), start, buffer.capacity()),
+                    ByteBuffer.wrap(buffer.array(), start, buffer.capacity() - start),
                     ByteBuffer.wrap(buffer.array(), 0, endExclusive)
                 };
             }
+        }
+
+        @Override
+        public String toString() {
+            return "RingBufferReadView{"
+                    + "start="
+                    + start
+                    + ", endExclusive="
+                    + endExclusive
+                    + '}';
         }
     }
 }

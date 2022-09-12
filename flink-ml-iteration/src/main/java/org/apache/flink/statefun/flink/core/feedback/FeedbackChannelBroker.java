@@ -44,7 +44,7 @@ public final class FeedbackChannelBroker {
     }
 
     @SuppressWarnings({"unchecked"})
-    public <V> RecordBasedFeedbackChannel<V> getChannel(
+    public <V> FeedbackChannel<V> getChannel(
             SubtaskFeedbackKey<V> key,
             Function<SubtaskFeedbackKey<V>, FeedbackChannel<V>> factory) {
         Objects.requireNonNull(key);
@@ -53,7 +53,7 @@ public final class FeedbackChannelBroker {
                 channels.computeIfAbsent(
                         key, (ignored) -> factory.apply((SubtaskFeedbackKey<V>) ignored));
 
-        return (RecordBasedFeedbackChannel<V>) channel;
+        return (FeedbackChannel<V>) channel;
     }
 
     @SuppressWarnings("resource")

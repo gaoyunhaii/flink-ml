@@ -52,6 +52,7 @@ public class DiskQueueReadView implements ReadView {
                         throw new EOFException();
                     }
 
+                    readBuffer.clear();
                     readChannel.read(readBuffer);
                     readBuffer.flip();
                     return readBuffer;

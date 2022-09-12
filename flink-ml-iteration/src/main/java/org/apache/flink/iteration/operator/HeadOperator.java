@@ -67,6 +67,7 @@ import org.apache.flink.runtime.operators.coordination.OperatorEventHandler;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StatePartitionStreamProvider;
 import org.apache.flink.runtime.state.StateSnapshotContext;
+import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannelBroker;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackConsumer;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackKey;
@@ -432,7 +433,7 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         IterationOptions.FeedbackType feedbackType =
                 configuration.get(IterationOptions.FEEDBACK_CHANNEL_TYPE);
         if (feedbackType == IterationOptions.FeedbackType.RECORD) {
-            RecordBasedFeedbackChannel<IterationRecord<?>> channel =
+            FeedbackChannel<IterationRecord<?>> channel =
                     broker.getChannel(key, RecordBasedFeedbackChannel::new);
             channel.registerConsumer(this, mailboxExecutor);
         } else {
@@ -443,11 +444,15 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
                                     .getEnvironment()
                                     .getIOManager()
                                     .getSpillingDirectoriesPaths());
-            SerializedFeedbackChannel<IterationRecord<?>> serializedFeedbackChannel =
-                    new SerializedFeedbackChannel<>(
-                            feedbackConfiguration,
-                            config.getTypeSerializerOut(getClass().getClassLoader()));
-            serializedFeedbackChannel.registerConsumer(this, mailboxExecutor);
+            FeedbackChannel<IterationRecord<?>> channel =
+                    broker.getChannel(
+                            key,
+                            (ignored) ->
+                                    new SerializedFeedbackChannel<>(
+                                            feedbackConfiguration,
+                                            config.getTypeSerializerOut(
+                                                    getClass().getClassLoader())));
+            channel.registerConsumer(this, mailboxExecutor);
         }
     }
 

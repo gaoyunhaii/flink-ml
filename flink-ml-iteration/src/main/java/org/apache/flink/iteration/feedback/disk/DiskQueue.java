@@ -140,16 +140,19 @@ public class DiskQueue {
 
                     RingQueue.RingBufferReadView view = (RingQueue.RingBufferReadView) next;
                     view.writeTo(fileChannel);
+                    resultQueue.add(view);
                 } catch (Exception e) {
+                    e.printStackTrace();
                     resultQueue.add(e);
                     break;
-                } finally {
-                    try {
-                        fileChannel.close();
-                    } catch (IOException e) {
-                        resultQueue.add(e);
-                    }
                 }
+            }
+
+            try {
+                fileChannel.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+                resultQueue.add(e);
             }
         }
     }

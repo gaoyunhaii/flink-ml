@@ -38,6 +38,7 @@ import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.operators.coordination.OperatorEvent;
 import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
 import org.apache.flink.runtime.state.CheckpointStorageLocationReference;
+import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannelBroker;
 import org.apache.flink.streaming.api.operators.StreamOperator;
@@ -846,8 +847,9 @@ public class HeadOperatorTest extends TestLogger {
     }
 
     private static void putFeedbackRecords(
-            IterationID iterationId, IterationRecord<?> record, @Nullable Long timestamp) {
-        RecordBasedFeedbackChannel<IterationRecord<?>> feedbackChannel =
+            IterationID iterationId, IterationRecord<?> record, @Nullable Long timestamp)
+            throws Exception {
+        FeedbackChannel<IterationRecord<?>> feedbackChannel =
                 FeedbackChannelBroker.get()
                         .getChannel(
                                 OperatorUtils.<IterationRecord<?>>createFeedbackKey(iterationId, 0)
@@ -886,8 +888,8 @@ public class HeadOperatorTest extends TestLogger {
      * We have to manually cleanup the feedback channel due to not be able to set the attempt
      * number.
      */
-    private static void cleanupFeedbackChannel(IterationID iterationId) {
-        RecordBasedFeedbackChannel<StreamRecord<IterationRecord<?>>> feedbackChannel =
+    private static void cleanupFeedbackChannel(IterationID iterationId) throws IOException {
+        FeedbackChannel<StreamRecord<IterationRecord<?>>> feedbackChannel =
                 FeedbackChannelBroker.get()
                         .getChannel(
                                 OperatorUtils.<StreamRecord<IterationRecord<?>>>createFeedbackKey(

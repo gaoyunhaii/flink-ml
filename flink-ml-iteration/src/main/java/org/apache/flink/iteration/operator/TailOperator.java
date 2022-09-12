@@ -27,6 +27,7 @@ import org.apache.flink.iteration.checkpoint.CheckpointsBroker;
 import org.apache.flink.iteration.config.IterationOptions;
 import org.apache.flink.iteration.feedback.FeedbackConfiguration;
 import org.apache.flink.iteration.feedback.SerializedFeedbackChannel;
+import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannelBroker;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackKey;
 import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
@@ -37,6 +38,7 @@ import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.StreamTask;
+import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.IOUtils;
 
 import java.util.Objects;
@@ -59,7 +61,7 @@ public class TailOperator extends AbstractStreamOperator<Void>
     /** We distinguish how the record is processed according to if objectReuse is enabled. */
     private transient Consumer<IterationRecord<?>> recordConsumer;
 
-    private transient RecordBasedFeedbackChannel<IterationRecord<?>> channel;
+    private transient FeedbackChannel<IterationRecord<?>> channel;
 
     public TailOperator(IterationID iterationId, int feedbackIndex) {
         this.iterationId = Objects.requireNonNull(iterationId);
@@ -98,7 +100,7 @@ public class TailOperator extends AbstractStreamOperator<Void>
                 (Runnable runnable) -> mailboxExecutor.execute(runnable::run, "Tail feedback");
 
         if (feedbackType.equals(IterationOptions.FeedbackType.RECORD)) {
-            this.channel = broker.getChannel(key, RecordBasedFeedbackChannel::new);
+            channel = broker.getChannel(key, RecordBasedFeedbackChannel::new);
             channel.registerProducer(executor);
         } else {
             this.channel =
@@ -154,7 +156,11 @@ public class TailOperator extends AbstractStreamOperator<Void>
         // Since the record would be reused, we have to clone a new one
         IterationRecord<?> cloned = record.clone();
         cloned.incrementEpoch();
-        channel.put(cloned);
+        try {
+            channel.put(cloned);
+        } catch (Exception exception) {
+            ExceptionUtils.rethrow(exception);
+        }
     }
 
     @Override

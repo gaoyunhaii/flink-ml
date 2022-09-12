@@ -26,6 +26,7 @@ import org.apache.flink.iteration.config.IterationOptions;
 import org.apache.flink.iteration.proxy.ProxyKeySelector;
 import org.apache.flink.iteration.utils.ReflectionUtils;
 import org.apache.flink.runtime.jobgraph.OperatorID;
+import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackConsumer;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackKey;
@@ -60,7 +61,7 @@ public class OperatorUtils {
 
     /** Registers the specified {@code feedbackConsumer} to the {@code feedbackChannel}. */
     public static <V> void registerFeedbackConsumer(
-            RecordBasedFeedbackChannel<V> feedbackChannel,
+            FeedbackChannel<V> feedbackChannel,
             FeedbackConsumer<V> feedbackConsumer,
             Executor executor) {
         ReflectionUtils.callMethod(

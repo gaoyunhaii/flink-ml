@@ -57,7 +57,7 @@ public class IterationOptions {
     public static final ConfigOption<FeedbackType> FEEDBACK_CHANNEL_TYPE =
             key("iteration.feedback.channel-type")
                     .enumType(FeedbackType.class)
-                    .defaultValue(FeedbackType.RECORD)
+                    .defaultValue(FeedbackType.SERIALIZED)
                     .withDescription("feedback channel type");
 
     public static enum FeedbackType {
