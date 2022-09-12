@@ -23,7 +23,9 @@ import java.util.concurrent.Executor;
 
 public interface FeedbackChannel<T> extends Closeable {
 
-    void put(T value);
+    void put(T value) throws Exception;
+
+    void registerProducer(final Executor producerExecutor);
 
     void registerConsumer(final FeedbackConsumer<T> consumer, Executor executor);
 }

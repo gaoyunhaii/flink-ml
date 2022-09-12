@@ -53,4 +53,16 @@ public class IterationOptions {
                     .memoryType()
                     .defaultValue(MemorySize.ofMebiBytes(2))
                     .withDescription("Read buffer size");
+
+    public static final ConfigOption<FeedbackType> FEEDBACK_CHANNEL_TYPE =
+            key("iteration.feedback.channel-type")
+                    .enumType(FeedbackType.class)
+                    .defaultValue(FeedbackType.RECORD)
+                    .withDescription("feedback channel type");
+
+    public static enum FeedbackType {
+        RECORD,
+
+        SERIALIZED
+    }
 }

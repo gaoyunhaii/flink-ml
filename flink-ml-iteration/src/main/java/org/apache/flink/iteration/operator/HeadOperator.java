@@ -25,6 +25,7 @@ import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.common.typeutils.base.IntSerializer;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.iteration.IterationID;
 import org.apache.flink.iteration.IterationListener;
@@ -33,7 +34,10 @@ import org.apache.flink.iteration.broadcast.BroadcastOutput;
 import org.apache.flink.iteration.broadcast.BroadcastOutputFactory;
 import org.apache.flink.iteration.checkpoint.Checkpoints;
 import org.apache.flink.iteration.checkpoint.CheckpointsBroker;
+import org.apache.flink.iteration.config.IterationOptions;
 import org.apache.flink.iteration.datacache.nonkeyed.DataCacheSnapshot;
+import org.apache.flink.iteration.feedback.FeedbackConfiguration;
+import org.apache.flink.iteration.feedback.SerializedFeedbackChannel;
 import org.apache.flink.iteration.operator.event.CoordinatorCheckpointEvent;
 import org.apache.flink.iteration.operator.event.GloballyAlignedEvent;
 import org.apache.flink.iteration.operator.event.SubtaskAlignedEvent;
@@ -63,10 +67,10 @@ import org.apache.flink.runtime.operators.coordination.OperatorEventHandler;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StatePartitionStreamProvider;
 import org.apache.flink.runtime.state.StateSnapshotContext;
-import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannelBroker;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackConsumer;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackKey;
+import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.SubtaskFeedbackKey;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
@@ -269,7 +273,8 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
                     if (status != HeadOperatorStatus.TERMINATED) {
                         mailboxExecutor.execute(runnable::run, "Head feedback");
                     }
-                });
+                },
+                getRuntimeContext().getTaskManagerRuntimeInfo().getConfiguration());
     }
 
     @Override
@@ -415,7 +420,7 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         }
     }
 
-    private void registerFeedbackConsumer(Executor mailboxExecutor) {
+    private void registerFeedbackConsumer(Executor mailboxExecutor, Configuration configuration) {
         int indexOfThisSubtask = getRuntimeContext().getIndexOfThisSubtask();
         int attemptNum = getRuntimeContext().getAttemptNumber();
         FeedbackKey<IterationRecord<?>> feedbackKey =
@@ -423,8 +428,27 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         SubtaskFeedbackKey<IterationRecord<?>> key =
                 feedbackKey.withSubTaskIndex(indexOfThisSubtask, attemptNum);
         FeedbackChannelBroker broker = FeedbackChannelBroker.get();
-        RecordBasedFeedbackChannel<IterationRecord<?>> channel = broker.getChannel(key);
-        OperatorUtils.registerFeedbackConsumer(channel, this, mailboxExecutor);
+
+        IterationOptions.FeedbackType feedbackType =
+                configuration.get(IterationOptions.FEEDBACK_CHANNEL_TYPE);
+        if (feedbackType == IterationOptions.FeedbackType.RECORD) {
+            RecordBasedFeedbackChannel<IterationRecord<?>> channel =
+                    broker.getChannel(key, RecordBasedFeedbackChannel::new);
+            channel.registerConsumer(this, mailboxExecutor);
+        } else {
+            FeedbackConfiguration feedbackConfiguration =
+                    new FeedbackConfiguration(
+                            configuration,
+                            getContainingTask()
+                                    .getEnvironment()
+                                    .getIOManager()
+                                    .getSpillingDirectoriesPaths());
+            SerializedFeedbackChannel<IterationRecord<?>> serializedFeedbackChannel =
+                    new SerializedFeedbackChannel<>(
+                            feedbackConfiguration,
+                            config.getTypeSerializerOut(getClass().getClassLoader()));
+            serializedFeedbackChannel.registerConsumer(this, mailboxExecutor);
+        }
     }
 
     private List<AbstractEvent> parseInputChannelEvents(InputChannel inputChannel)

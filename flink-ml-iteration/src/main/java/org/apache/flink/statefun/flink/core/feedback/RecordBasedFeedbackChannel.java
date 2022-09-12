@@ -50,6 +50,11 @@ public final class RecordBasedFeedbackChannel<T> implements FeedbackChannel<T> {
     // API
     // --------------------------------------------------------------------------------------------------------------
 
+    @Override
+    public void registerProducer(Executor producerExecutor) {
+        // Do nothing.
+    }
+
     /** Adds a feedback result to this channel. */
     @Override
     public void put(T value) {

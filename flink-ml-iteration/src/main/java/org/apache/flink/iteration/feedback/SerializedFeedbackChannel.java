@@ -26,6 +26,7 @@ import org.apache.flink.iteration.feedback.disk.DiskQueue;
 import org.apache.flink.iteration.feedback.ring.RingQueue;
 import org.apache.flink.runtime.io.network.api.writer.RecordWriter;
 import org.apache.flink.runtime.plugable.SerializationDelegate;
+import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackConsumer;
 
 import javax.annotation.Nullable;
@@ -63,19 +64,21 @@ import static org.apache.flink.util.Preconditions.checkState;
  *
  * <p>At last, the large record is dealt separately.
  */
-public class SerializedFeedbackChannel<T> {
+public class SerializedFeedbackChannel<T> implements FeedbackChannel<T> {
 
     private final FeedbackConfiguration config;
 
     private final TypeSerializer<T> typeSerializer;
-
-    private final Executor writerExecutor;
 
     private final ByteBuffer fileWriteBuffer;
 
     private final ByteBuffer fileReadBuffer;
 
     private final ExecutorService flushExecutor;
+
+    // ------------ producer state -----------------
+
+    @Nullable private Executor writerExecutor;
 
     // -----  serialization related ------------------
     private final DataOutputSerializer serializer;
@@ -97,12 +100,9 @@ public class SerializedFeedbackChannel<T> {
     private final AtomicReference<ConsumerTask> consumerRef = new AtomicReference<>();
 
     public SerializedFeedbackChannel(
-            FeedbackConfiguration config,
-            TypeSerializer<T> typeSerializer,
-            Executor writerExecutor) {
+            FeedbackConfiguration config, TypeSerializer<T> typeSerializer) {
         this.config = checkNotNull(config);
         this.typeSerializer = checkNotNull(typeSerializer);
-        this.writerExecutor = checkNotNull(writerExecutor);
 
         ByteBuffer inMemoryBuffer =
                 ByteBuffer.allocate((int) config.getInMemoryBufferSize().getBytes());
@@ -115,6 +115,11 @@ public class SerializedFeedbackChannel<T> {
         this.serializer = new DataOutputSerializer(128);
 
         this.inMemQueue = new RingQueue(inMemoryBuffer);
+    }
+
+    @Override
+    public void registerProducer(Executor producerExecutor) {
+        this.writerExecutor = producerExecutor;
     }
 
     public void put(T t) throws Exception {
@@ -176,6 +181,10 @@ public class SerializedFeedbackChannel<T> {
     }
 
     private void onConsumed(List<ReadView> consumed) {
+        if (writerExecutor == null) {
+            return;
+        }
+
         writerExecutor.execute(
                 () -> {
                     try {
