@@ -72,22 +72,22 @@ under the License.
             <scope>provided</scope>
         </dependency>
 
-        <!-- Required for feedback edge implementation -->
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>statefun-flink-core</artifactId>
-            <version>${statefun.version}</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.apache.flink</groupId>
-                    <artifactId>flink-streaming-java_2.12</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.apache.flink</groupId>
-                    <artifactId>flink-metrics-dropwizard</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
+<!--        &lt;!&ndash; Required for feedback edge implementation &ndash;&gt;-->
+        <!--        <dependency>-->
+        <!--            <groupId>org.apache.flink</groupId>-->
+        <!--            <artifactId>statefun-flink-core</artifactId>-->
+        <!--            <version>${statefun.version}</version>-->
+        <!--            <exclusions>-->
+        <!--                <exclusion>-->
+        <!--                    <groupId>org.apache.flink</groupId>-->
+        <!--                    <artifactId>flink-streaming-java_2.12</artifactId>-->
+        <!--                </exclusion>-->
+        <!--                <exclusion>-->
+        <!--                    <groupId>org.apache.flink</groupId>-->
+        <!--                    <artifactId>flink-metrics-dropwizard</artifactId>-->
+        <!--                </exclusion>-->
+        <!--            </exclusions>-->
+        <!--        </dependency>-->
 
         <dependency>
             <groupId>org.apache.flink</groupId>

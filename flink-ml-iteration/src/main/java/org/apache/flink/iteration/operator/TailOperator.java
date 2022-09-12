@@ -22,7 +22,7 @@ import org.apache.flink.iteration.IterationID;
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.checkpoint.Checkpoints;
 import org.apache.flink.iteration.checkpoint.CheckpointsBroker;
-import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
+import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannelBroker;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackKey;
 import org.apache.flink.statefun.flink.core.feedback.SubtaskFeedbackKey;
@@ -51,7 +51,7 @@ public class TailOperator extends AbstractStreamOperator<Void>
     /** We distinguish how the record is processed according to if objectReuse is enabled. */
     private transient Consumer<IterationRecord<?>> recordConsumer;
 
-    private transient FeedbackChannel<IterationRecord<?>> channel;
+    private transient RecordBasedFeedbackChannel<IterationRecord<?>> channel;
 
     public TailOperator(IterationID iterationId, int feedbackIndex) {
         this.iterationId = Objects.requireNonNull(iterationId);

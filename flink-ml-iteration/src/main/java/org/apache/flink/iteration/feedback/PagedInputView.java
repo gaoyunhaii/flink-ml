@@ -16,16 +16,16 @@
  * limitations under the License.
  */
 
-package org.apache.flink.iteration.feedback.ring;
+package org.apache.flink.iteration.feedback;
 
 import org.apache.flink.core.memory.DataInputView;
+import org.apache.flink.util.function.SupplierWithException;
 
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.UTFDataFormatException;
 import java.nio.ByteBuffer;
 
-import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
@@ -36,9 +36,8 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  */
 public class PagedInputView implements DataInputView {
 
-    private final ByteBuffer[] buffers;
-
-    private int currentBuffer;
+    SupplierWithException<ByteBuffer, IOException> bufferSupplier;
+    private ByteBuffer currentBuffer;
 
     private byte[] utfByteBuffer; // reusable byte buffer for utf-8 decoding
     private char[] utfCharBuffer; // reusable char buffer for utf-8 decoding
@@ -47,10 +46,10 @@ public class PagedInputView implements DataInputView {
     //                                    Constructors
     // --------------------------------------------------------------------------------------------
 
-    public PagedInputView(ByteBuffer[] buffers) {
-        this.buffers = checkNotNull(buffers);
-        checkArgument(buffers.length > 1, "It should contains at least one buffer");
-        this.currentBuffer = 0;
+    public PagedInputView(SupplierWithException<ByteBuffer, IOException> bufferSupplier)
+            throws IOException {
+        this.bufferSupplier = checkNotNull(bufferSupplier);
+        this.currentBuffer = bufferSupplier.get();
     }
 
     // --------------------------------------------------------------------------------------------
@@ -58,11 +57,7 @@ public class PagedInputView implements DataInputView {
     // --------------------------------------------------------------------------------------------
 
     public void advance() throws IOException {
-        if (currentBuffer < buffers.length - 1) {
-            this.currentBuffer++;
-        }
-
-        throw new EOFException();
+        currentBuffer = bufferSupplier.get();
     }
 
     // --------------------------------------------------------------------------------------------
@@ -80,14 +75,14 @@ public class PagedInputView implements DataInputView {
             throw new IndexOutOfBoundsException();
         }
 
-        if (buffers[currentBuffer].remaining() >= len) {
-            buffers[currentBuffer].get(b, off, len);
+        if (currentBuffer.remaining() >= len) {
+            currentBuffer.get(b, off, len);
             return len;
         } else {
             int bytesRead = 0;
             while (true) {
-                int toRead = Math.min(buffers[currentBuffer].remaining(), len - bytesRead);
-                buffers[currentBuffer].get(b, off, toRead);
+                int toRead = Math.min(currentBuffer.remaining(), len - bytesRead);
+                currentBuffer.get(b, off, toRead);
                 off += toRead;
                 bytesRead += toRead;
 
@@ -127,8 +122,8 @@ public class PagedInputView implements DataInputView {
 
     @Override
     public byte readByte() throws IOException {
-        if (buffers[currentBuffer].hasRemaining()) {
-            return buffers[currentBuffer].get();
+        if (currentBuffer.hasRemaining()) {
+            return currentBuffer.get();
         } else {
             advance();
             return readByte();
@@ -142,9 +137,9 @@ public class PagedInputView implements DataInputView {
 
     @Override
     public short readShort() throws IOException {
-        if (buffers[currentBuffer].remaining() > 1) {
-            return buffers[currentBuffer].getShort();
-        } else if (buffers[currentBuffer].remaining() == 0) {
+        if (currentBuffer.remaining() > 1) {
+            return currentBuffer.getShort();
+        } else if (currentBuffer.remaining() == 0) {
             advance();
             return readShort();
         } else {
@@ -154,9 +149,9 @@ public class PagedInputView implements DataInputView {
 
     @Override
     public int readUnsignedShort() throws IOException {
-        if (buffers[currentBuffer].remaining() > 1) {
-            return this.buffers[currentBuffer].getShort() & 0xffff;
-        } else if (buffers[currentBuffer].remaining() == 0) {
+        if (currentBuffer.remaining() > 1) {
+            return this.currentBuffer.getShort() & 0xffff;
+        } else if (currentBuffer.remaining() == 0) {
             advance();
             return readUnsignedShort();
         } else {
@@ -166,9 +161,9 @@ public class PagedInputView implements DataInputView {
 
     @Override
     public char readChar() throws IOException {
-        if (buffers[currentBuffer].remaining() > 1) {
-            return buffers[currentBuffer].getChar();
-        } else if (buffers[currentBuffer].remaining() == 0) {
+        if (currentBuffer.remaining() > 1) {
+            return currentBuffer.getChar();
+        } else if (currentBuffer.remaining() == 0) {
             advance();
             return readChar();
         } else {
@@ -178,9 +173,9 @@ public class PagedInputView implements DataInputView {
 
     @Override
     public int readInt() throws IOException {
-        if (buffers[currentBuffer].remaining() > 3) {
-            return buffers[currentBuffer].getInt();
-        } else if (buffers[currentBuffer].remaining() == 0) {
+        if (currentBuffer.remaining() > 3) {
+            return currentBuffer.getInt();
+        } else if (currentBuffer.remaining() == 0) {
             advance();
             return readInt();
         } else {
@@ -193,9 +188,9 @@ public class PagedInputView implements DataInputView {
 
     @Override
     public long readLong() throws IOException {
-        if (buffers[currentBuffer].remaining() > 7) {
-            return buffers[currentBuffer].getLong();
-        } else if (buffers[currentBuffer].remaining() == 0) {
+        if (currentBuffer.remaining() > 7) {
+            return currentBuffer.getLong();
+        } else if (currentBuffer.remaining() == 0) {
             advance();
             return readLong();
         } else {
@@ -346,14 +341,14 @@ public class PagedInputView implements DataInputView {
             throw new IllegalArgumentException();
         }
 
-        if (buffers[currentBuffer].remaining() >= n) {
-            int position = buffers[currentBuffer].position();
-            buffers[currentBuffer].position(position + n);
+        if (currentBuffer.remaining() >= n) {
+            int position = currentBuffer.position();
+            currentBuffer.position(position + n);
             return n;
         } else {
             int skipped = 0;
             while (true) {
-                int toSKip = Math.min(buffers[currentBuffer].remaining(), n);
+                int toSKip = Math.min(currentBuffer.remaining(), n);
                 n -= toSKip;
                 skipped += toSKip;
 
@@ -378,13 +373,13 @@ public class PagedInputView implements DataInputView {
             throw new IllegalArgumentException();
         }
 
-        if (buffers[currentBuffer].remaining() >= numBytes) {
-            int position = buffers[currentBuffer].position();
-            buffers[currentBuffer].position(position + numBytes);
+        if (currentBuffer.remaining() >= numBytes) {
+            int position = currentBuffer.position();
+            currentBuffer.position(position + numBytes);
         } else {
             while (true) {
-                if (numBytes > buffers[currentBuffer].remaining()) {
-                    numBytes -= buffers[currentBuffer].remaining();
+                if (numBytes > currentBuffer.remaining()) {
+                    numBytes -= currentBuffer.remaining();
                     advance();
                 } else {
                     break;

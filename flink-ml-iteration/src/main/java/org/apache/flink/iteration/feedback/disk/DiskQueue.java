@@ -38,13 +38,18 @@ public class DiskQueue {
 
     private final RingQueue writeBuffer;
 
+    private final String path;
+
     private final BlockingQueue<Object> flushTasks;
 
     private final BlockingQueue<Object> finishedTasks;
 
+    private boolean closed;
+
     public DiskQueue(ByteBuffer buffer, ExecutorService ioExecutor, String path)
             throws IOException {
         this.writeBuffer = new RingQueue(buffer);
+        this.path = path;
 
         this.flushTasks = new LinkedBlockingQueue<>();
         this.finishedTasks = new LinkedBlockingQueue<>();
@@ -67,6 +72,10 @@ public class DiskQueue {
     }
 
     public void close() throws Exception {
+        if (closed) {
+            return;
+        }
+
         // Flush the remaining bytes
         flushTasks.add(writeBuffer.getReadView());
 
@@ -79,14 +88,20 @@ public class DiskQueue {
         do {
             next = waitTillNextFlushFinished();
         } while (next != tag);
+
+        closed = true;
+    }
+
+    public DiskQueueReadView getReadView(ByteBuffer readBuffer) throws IOException {
+        return new DiskQueueReadView(readBuffer, path);
     }
 
     private Object waitTillNextFlushFinished() throws Exception {
         Object next = finishedTasks.take();
         if (next instanceof Exception) {
             throw (Exception) next;
-        } else if (next instanceof RingQueue.ReadView) {
-            writeBuffer.recycle((RingQueue.ReadView) next);
+        } else if (next instanceof RingQueue.RingBufferReadView) {
+            ((RingQueue.RingBufferReadView) next).recycle();
         }
 
         return next;
@@ -118,12 +133,12 @@ public class DiskQueue {
             while (true) {
                 try {
                     Object next = tasks.take();
-                    if (!(next instanceof RingQueue.ReadView)) {
+                    if (!(next instanceof RingQueue.RingBufferReadView)) {
                         resultQueue.add(next);
                         break;
                     }
 
-                    RingQueue.ReadView view = (RingQueue.ReadView) next;
+                    RingQueue.RingBufferReadView view = (RingQueue.RingBufferReadView) next;
                     view.writeTo(fileChannel);
                 } catch (Exception e) {
                     resultQueue.add(e);

@@ -19,7 +19,11 @@
 package org.apache.flink.iteration.feedback.ring;
 
 import org.apache.flink.core.memory.DataInputView;
+import org.apache.flink.iteration.feedback.PagedInputView;
+import org.apache.flink.iteration.feedback.ReadView;
+import org.apache.flink.util.function.SupplierWithException;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -67,16 +71,16 @@ public class RingQueue {
         return true;
     }
 
-    public ReadView getReadView() {
+    public RingBufferReadView getReadView() {
         int currentWritingStartPos = (readStart + readingSize) % buffer.capacity();
         int currentWritingEndPos = (currentWritingStartPos + writtenSize) % buffer.capacity();
 
         readingSize += writtenSize;
         writtenSize = 0;
-        return new ReadView(currentWritingStartPos, currentWritingEndPos);
+        return new RingBufferReadView(currentWritingStartPos, currentWritingEndPos);
     }
 
-    public void recycle(ReadView readView) {
+    private void recycle(RingBufferReadView readView) {
         checkState(readView != null && readView.start == readStart);
 
         int size =
@@ -91,19 +95,38 @@ public class RingQueue {
         return buffer;
     }
 
-    public class ReadView {
+    public class RingBufferReadView implements ReadView {
 
         private final int start;
 
         private final int endExclusive;
 
-        public ReadView(int start, int endExclusive) {
+        public RingBufferReadView(int start, int endExclusive) {
             this.start = start;
             this.endExclusive = endExclusive;
         }
 
-        public DataInputView toDataInputView() {
-            return new PagedInputView(toBuffers());
+        public DataInputView toDataInputView() throws IOException {
+            ByteBuffer[] buffers = toBuffers();
+            return new PagedInputView(
+                    new SupplierWithException<ByteBuffer, IOException>() {
+
+                        private int next = 0;
+
+                        @Override
+                        public ByteBuffer get() throws IOException {
+                            if (next < buffers.length) {
+                                return buffers[next++];
+                            }
+
+                            throw new EOFException();
+                        }
+                    });
+        }
+
+        @Override
+        public void recycle() {
+            RingQueue.this.recycle(this);
         }
 
         public void writeTo(FileChannel channel) throws IOException {

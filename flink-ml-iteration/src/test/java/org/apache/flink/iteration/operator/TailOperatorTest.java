@@ -21,8 +21,8 @@ package org.apache.flink.iteration.operator;
 import org.apache.flink.iteration.IterationID;
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.runtime.testutils.DirectScheduledExecutorService;
-import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannelBroker;
+import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
 import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
 import org.apache.flink.util.TestLogger;
 
@@ -89,12 +89,13 @@ public class TailOperatorTest extends TestLogger {
 
     static List<IterationRecord<?>> getFeedbackRecords(
             IterationID iterationId, int feedbackIndex, int subtaskIndex, int attemptNumber) {
-        FeedbackChannel<IterationRecord<?>> feedbackChannel =
+        RecordBasedFeedbackChannel<IterationRecord<?>> feedbackChannel =
                 FeedbackChannelBroker.get()
                         .getChannel(
                                 OperatorUtils.<IterationRecord<?>>createFeedbackKey(
                                                 iterationId, feedbackIndex)
-                                        .withSubTaskIndex(subtaskIndex, attemptNumber));
+                                        .withSubTaskIndex(subtaskIndex, attemptNumber),
+                                RecordBasedFeedbackChannel::new);
         List<IterationRecord<?>> iterationRecords = new ArrayList<>();
         OperatorUtils.registerFeedbackConsumer(
                 feedbackChannel, iterationRecords::add, new DirectScheduledExecutorService());

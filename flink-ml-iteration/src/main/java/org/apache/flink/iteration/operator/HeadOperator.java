@@ -63,7 +63,7 @@ import org.apache.flink.runtime.operators.coordination.OperatorEventHandler;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StatePartitionStreamProvider;
 import org.apache.flink.runtime.state.StateSnapshotContext;
-import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
+import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannelBroker;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackConsumer;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackKey;
@@ -423,7 +423,7 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         SubtaskFeedbackKey<IterationRecord<?>> key =
                 feedbackKey.withSubTaskIndex(indexOfThisSubtask, attemptNum);
         FeedbackChannelBroker broker = FeedbackChannelBroker.get();
-        FeedbackChannel<IterationRecord<?>> channel = broker.getChannel(key);
+        RecordBasedFeedbackChannel<IterationRecord<?>> channel = broker.getChannel(key);
         OperatorUtils.registerFeedbackConsumer(channel, this, mailboxExecutor);
     }
 

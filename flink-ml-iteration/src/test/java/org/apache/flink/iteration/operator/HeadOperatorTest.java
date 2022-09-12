@@ -38,7 +38,7 @@ import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.operators.coordination.OperatorEvent;
 import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
 import org.apache.flink.runtime.state.CheckpointStorageLocationReference;
-import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
+import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannelBroker;
 import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
@@ -847,11 +847,12 @@ public class HeadOperatorTest extends TestLogger {
 
     private static void putFeedbackRecords(
             IterationID iterationId, IterationRecord<?> record, @Nullable Long timestamp) {
-        FeedbackChannel<IterationRecord<?>> feedbackChannel =
+        RecordBasedFeedbackChannel<IterationRecord<?>> feedbackChannel =
                 FeedbackChannelBroker.get()
                         .getChannel(
                                 OperatorUtils.<IterationRecord<?>>createFeedbackKey(iterationId, 0)
-                                        .withSubTaskIndex(0, 0));
+                                        .withSubTaskIndex(0, 0),
+                                RecordBasedFeedbackChannel::new);
         feedbackChannel.put(record);
     }
 
@@ -886,12 +887,13 @@ public class HeadOperatorTest extends TestLogger {
      * number.
      */
     private static void cleanupFeedbackChannel(IterationID iterationId) {
-        FeedbackChannel<StreamRecord<IterationRecord<?>>> feedbackChannel =
+        RecordBasedFeedbackChannel<StreamRecord<IterationRecord<?>>> feedbackChannel =
                 FeedbackChannelBroker.get()
                         .getChannel(
                                 OperatorUtils.<StreamRecord<IterationRecord<?>>>createFeedbackKey(
                                                 iterationId, 0)
-                                        .withSubTaskIndex(0, 0));
+                                        .withSubTaskIndex(0, 0),
+                                RecordBasedFeedbackChannel::new);
         feedbackChannel.close();
     }
 
