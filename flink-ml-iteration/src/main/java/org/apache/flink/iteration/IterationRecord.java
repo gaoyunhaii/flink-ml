@@ -90,6 +90,9 @@ public class IterationRecord<T> implements Cloneable, Serializable {
 
     public void incrementEpoch() {
         this.epoch += 1;
+        if (this.epoch < 0) {
+            this.epoch = Integer.MAX_VALUE;
+        }
     }
 
     public T getValue() {

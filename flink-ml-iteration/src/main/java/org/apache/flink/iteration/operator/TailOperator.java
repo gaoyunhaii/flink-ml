@@ -154,10 +154,9 @@ public class TailOperator extends AbstractStreamOperator<Void>
 
     private void processIfObjectReuseEnabled(IterationRecord<?> record) {
         // Since the record would be reused, we have to clone a new one
-        IterationRecord<?> cloned = record.clone();
-        cloned.incrementEpoch();
+        record.incrementEpoch();
         try {
-            channel.put(cloned);
+            channel.put(record);
         } catch (Exception exception) {
             ExceptionUtils.rethrow(exception);
         }
