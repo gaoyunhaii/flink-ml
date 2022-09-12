@@ -20,6 +20,7 @@ package org.apache.flink.iteration.config;
 
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.CoreOptions;
+import org.apache.flink.configuration.MemorySize;
 
 import static org.apache.flink.configuration.ConfigOptions.key;
 
@@ -34,4 +35,22 @@ public class IterationOptions {
                             "The base path of the data cached used inside the iteration. "
                                     + "If not specified, it will use local path randomly chosen from "
                                     + CoreOptions.TMP_DIRS.key());
+
+    public static final ConfigOption<MemorySize> FEEDBACK_IN_MEMORY_BUFFER_SIZE =
+            key("iteration.feedback.in-memory.buffer-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ofMebiBytes(16))
+                    .withDescription("The total size of in-memory queue");
+
+    public static final ConfigOption<MemorySize> FEEDBACK_WRITE_BUFFER_SIZE =
+            key("iteration.feedback.write.buffer-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ofMebiBytes(2))
+                    .withDescription("Write buffer size");
+
+    public static final ConfigOption<MemorySize> FEEDBACK_READ_BUFFER_SIZE =
+            key("iteration.feedback.read.buffer-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ofMebiBytes(2))
+                    .withDescription("Read buffer size");
 }
