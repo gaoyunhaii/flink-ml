@@ -110,7 +110,9 @@ public class ReusedIterationRecordSerializer<T> extends TypeSerializer<Iteration
     @Override
     public void serialize(IterationRecord<T> record, DataOutputView target) throws IOException {
         target.writeByte((byte) record.getType().ordinal());
-        serializerNumber(record.getEpoch(), target);
+        // serializerNumber(record.getEpoch(), target);
+        target.writeInt(record.getEpoch());
+
         switch (record.getType()) {
             case RECORD:
                 innerSerializer.serialize(record.getValue(), target);
@@ -129,7 +131,8 @@ public class ReusedIterationRecordSerializer<T> extends TypeSerializer<Iteration
     @Override
     public IterationRecord<T> deserialize(DataInputView source) throws IOException {
         int type = source.readByte();
-        int epoch = deserializeNumber(source);
+        // int epoch = deserializeNumber(source);
+        int epoch = source.readInt();
 
         reusedWrapper.setType(IterationRecord.Type.values()[type]);
         reusedWrapper.setEpoch(epoch);

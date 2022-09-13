@@ -20,10 +20,13 @@ package org.apache.flink.iteration.feedback;
 
 import org.apache.flink.api.common.typeutils.base.array.BytePrimitiveArraySerializer;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.iteration.IterationID;
 import org.apache.flink.iteration.IterationRecord;
+import org.apache.flink.iteration.operator.OperatorUtils;
 import org.apache.flink.iteration.typeinfo.ReusedIterationRecordSerializer;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackConsumer;
+import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
 
 import org.junit.Test;
 
@@ -60,8 +63,13 @@ public class SerializedFeedbackChannelTest {
 
         FeedbackConfiguration config =
                 new FeedbackConfiguration(new Configuration(), new String[] {"/tmp"});
-        SerializedFeedbackChannel<IterationRecord<byte[]>> channel =
-                new SerializedFeedbackChannel<>(config, serializer);
+        //        FeedbackChannel<IterationRecord<byte[]>> channel =
+        //                new SerializedFeedbackChannel<>(config, serializer);
+        FeedbackChannel<IterationRecord<byte[]>> channel =
+                new RecordBasedFeedbackChannel<>(
+                        OperatorUtils.<IterationRecord<byte[]>>createFeedbackKey(
+                                        new IterationID(), 0)
+                                .withSubTaskIndex(0, 0));
 
         Writer writer = new Writer(COUNT, ARRAY_SIZE, channel);
         Reader reader = new Reader();
@@ -135,10 +143,7 @@ public class SerializedFeedbackChannelTest {
 
         int next;
 
-        public Writer(
-                int count,
-                int arraySize,
-                SerializedFeedbackChannel<IterationRecord<byte[]>> channel) {
+        public Writer(int count, int arraySize, FeedbackChannel<IterationRecord<byte[]>> channel) {
             this.count = count;
             this.arraySize = arraySize;
             this.channel = channel;
@@ -156,7 +161,7 @@ public class SerializedFeedbackChannelTest {
                 int nextBatch = random.nextInt(50) + 1;
                 for (int i = 0; i < nextBatch && next < COUNT; ++i) {
                     reused.setValue(ARRAYS.get(next % 26));
-                    channel.put(reused);
+                    channel.put(reused.clone());
                     next++;
 
                     //                    if (next % 10000 == 0) {

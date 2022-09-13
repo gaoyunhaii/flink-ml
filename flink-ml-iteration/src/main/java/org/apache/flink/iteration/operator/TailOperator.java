@@ -34,6 +34,7 @@ import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.SubtaskFeedbackKey;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
+import org.apache.flink.streaming.api.operators.ChainingStrategy;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
@@ -66,6 +67,7 @@ public class TailOperator extends AbstractStreamOperator<Void>
     public TailOperator(IterationID iterationId, int feedbackIndex) {
         this.iterationId = Objects.requireNonNull(iterationId);
         this.feedbackIndex = feedbackIndex;
+        this.chainingStrategy = ChainingStrategy.ALWAYS;
     }
 
     @Override
