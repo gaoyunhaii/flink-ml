@@ -75,7 +75,7 @@ public class IterationRecordSerializer<T> extends TypeSerializer<IterationRecord
 
     @Override
     public IterationRecord<T> copy(IterationRecord<T> from, IterationRecord<T> reuse) {
-        from.setType(reuse.getType());
+        reuse.setType(from.getType());
         reuse.setEpoch(from.getEpoch());
 
         switch (from.getType()) {
