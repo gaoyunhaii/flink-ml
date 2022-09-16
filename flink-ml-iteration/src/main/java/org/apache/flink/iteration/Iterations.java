@@ -123,7 +123,8 @@ public class Iterations {
                 Collections.emptySet(),
                 body,
                 new AllRoundOperatorWrapper(),
-                false);
+                false,
+                1 /* Currently we first not support mini-batch for unbounded iterations */);
     }
 
     /**
@@ -166,7 +167,8 @@ public class Iterations {
                 replayedIndices,
                 body,
                 wrapper,
-                true);
+                true,
+                config.getMiniBatchRecords());
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -176,7 +178,8 @@ public class Iterations {
             Set<Integer> replayedDataStreamIndices,
             IterationBody body,
             OperatorWrapper<?, IterationRecord<?>> initialOperatorWrapper,
-            boolean mayHaveCriteria) {
+            boolean mayHaveCriteria,
+            int miniBatchRecords) {
         checkState(initVariableStreams.size() > 0, "There should be at least one variable stream");
 
         IterationID iterationId = new IterationID();

@@ -18,14 +18,19 @@
 
 package org.apache.flink.iteration;
 
+import static org.apache.flink.util.Preconditions.checkArgument;
+
 /** The config for an iteration. */
 public class IterationConfig {
 
     /** The default operator lifecycle. */
     private final OperatorLifeCycle operatorLifeCycle;
 
-    public IterationConfig(OperatorLifeCycle operatorLifeCycle) {
+    private final int miniBatchRecords;
+
+    public IterationConfig(OperatorLifeCycle operatorLifeCycle, int miniBatchRecords) {
         this.operatorLifeCycle = operatorLifeCycle;
+        this.miniBatchRecords = miniBatchRecords;
     }
 
     public static IterationConfigBuilder newBuilder() {
@@ -37,10 +42,16 @@ public class IterationConfig {
         return operatorLifeCycle;
     }
 
+    public int getMiniBatchRecords() {
+        return miniBatchRecords;
+    }
+
     /** The builder of the {@link IterationConfig}. */
     public static class IterationConfigBuilder {
 
         private OperatorLifeCycle operatorLifeCycle = OperatorLifeCycle.ALL_ROUND;
+
+        private int miniBatchRecords = 1;
 
         private IterationConfigBuilder() {}
 
@@ -49,8 +60,14 @@ public class IterationConfig {
             return this;
         }
 
+        public IterationConfigBuilder setMiniBatchRecords(int miniBatchRecords) {
+            checkArgument(miniBatchRecords >= 1, "mini-batch size must be positive");
+            this.miniBatchRecords = miniBatchRecords;
+            return this;
+        }
+
         public IterationConfig build() {
-            return new IterationConfig(operatorLifeCycle);
+            return new IterationConfig(operatorLifeCycle, miniBatchRecords);
         }
     }
 
