@@ -71,6 +71,7 @@ import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannelBroker;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackConsumer;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackKey;
+import org.apache.flink.statefun.flink.core.feedback.IterationFeedbackChannelProvider;
 import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.SubtaskFeedbackKey;
 import org.apache.flink.streaming.api.graph.StreamConfig;
@@ -133,6 +134,8 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
 
     private final MailboxExecutor mailboxExecutor;
 
+    private final IterationFeedbackChannelProvider feedbackChannelProvider;
+
     private transient BroadcastOutput<?> eventBroadcastOutput;
 
     private transient ContextImpl processorContext;
@@ -161,12 +164,14 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
             boolean isCriteriaStream,
             MailboxExecutor mailboxExecutor,
             OperatorEventGateway operatorEventGateway,
-            ProcessingTimeService processingTimeService) {
+            ProcessingTimeService processingTimeService,
+            IterationFeedbackChannelProvider feedbackChannelProvider) {
         this.iterationId = Objects.requireNonNull(iterationId);
         this.feedbackIndex = feedbackIndex;
         this.isCriteriaStream = isCriteriaStream;
         this.mailboxExecutor = Objects.requireNonNull(mailboxExecutor);
         this.operatorEventGateway = Objects.requireNonNull(operatorEventGateway);
+        this.feedbackChannelProvider = Objects.requireNonNull(feedbackChannelProvider);
 
         // Even though this operator does not use the processing
         // time service, AbstractStreamOperator requires this
@@ -268,14 +273,20 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
             throw new FlinkRuntimeException("Failed to replay the records", e);
         }
 
-        // Here we register a mail
-        registerFeedbackConsumer(
+        feedbackChannelProvider.registerConsumerToChannel(
+                getRuntimeContext().getTaskManagerRuntimeInfo().getConfiguration(),
+                getContainingTask().getEnvironment().getIOManager().getSpillingDirectoriesPaths(),
+                config,
+                iterationId,
+                feedbackIndex,
+                getRuntimeContext().getIndexOfThisSubtask(),
+                getRuntimeContext().getAttemptNumber(),
                 (Runnable runnable) -> {
                     if (status != HeadOperatorStatus.TERMINATED) {
                         mailboxExecutor.execute(runnable::run, "Head feedback");
                     }
                 },
-                getRuntimeContext().getTaskManagerRuntimeInfo().getConfiguration());
+                this);
     }
 
     @Override
@@ -418,41 +429,6 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     public void close() throws Exception {
         if (checkpoints != null) {
             checkpoints.close();
-        }
-    }
-
-    private void registerFeedbackConsumer(Executor mailboxExecutor, Configuration configuration) {
-        int indexOfThisSubtask = getRuntimeContext().getIndexOfThisSubtask();
-        int attemptNum = getRuntimeContext().getAttemptNumber();
-        FeedbackKey<IterationRecord<?>> feedbackKey =
-                OperatorUtils.createFeedbackKey(iterationId, feedbackIndex);
-        SubtaskFeedbackKey<IterationRecord<?>> key =
-                feedbackKey.withSubTaskIndex(indexOfThisSubtask, attemptNum);
-        FeedbackChannelBroker broker = FeedbackChannelBroker.get();
-
-        IterationOptions.FeedbackType feedbackType =
-                configuration.get(IterationOptions.FEEDBACK_CHANNEL_TYPE);
-        if (feedbackType == IterationOptions.FeedbackType.RECORD) {
-            FeedbackChannel<IterationRecord<?>> channel =
-                    broker.getChannel(key, RecordBasedFeedbackChannel::new);
-            channel.registerConsumer(this, mailboxExecutor);
-        } else {
-            FeedbackConfiguration feedbackConfiguration =
-                    new FeedbackConfiguration(
-                            configuration,
-                            getContainingTask()
-                                    .getEnvironment()
-                                    .getIOManager()
-                                    .getSpillingDirectoriesPaths());
-            FeedbackChannel<IterationRecord<?>> channel =
-                    broker.getChannel(
-                            key,
-                            (ignored) ->
-                                    new SerializedFeedbackChannel<>(
-                                            feedbackConfiguration,
-                                            config.getTypeSerializerOut(
-                                                    getClass().getClassLoader())));
-            channel.registerConsumer(this, mailboxExecutor);
         }
     }
 

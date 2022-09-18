@@ -53,6 +53,20 @@ public class MiniBatchRecord<T> {
         return timestamps;
     }
 
+    public void addRecord(IterationRecord<T> record, Long timestamp) {
+        records.add(record);
+        timestamps.add(timestamp);
+    }
+
+    public void clear() {
+        records.clear();
+        timestamps.clear();
+    }
+
+    public int getSize() {
+        return records.size();
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {

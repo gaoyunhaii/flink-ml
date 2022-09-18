@@ -16,13 +16,15 @@
  * limitations under the License.
  */
 
-package org.apache.flink.iteration.operator;
+package org.apache.flink.iteration.minibatch.operator;
 
 import org.apache.flink.api.common.operators.MailboxExecutor;
 import org.apache.flink.iteration.IterationID;
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.checkpoint.Checkpoints;
 import org.apache.flink.iteration.checkpoint.CheckpointsBroker;
+import org.apache.flink.iteration.minibatch.MiniBatchRecord;
+import org.apache.flink.iteration.operator.OperatorUtils;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.RecordwiseFeedbackChannelProvider;
 import org.apache.flink.statefun.flink.core.feedback.SubtaskFeedbackKey;
@@ -39,12 +41,8 @@ import org.apache.flink.util.IOUtils;
 import java.util.Objects;
 import java.util.function.Consumer;
 
-/**
- * The tail operators is attached after each feedback operator to increment the round of each
- * record.
- */
-public class TailOperator extends AbstractStreamOperator<Void>
-        implements OneInputStreamOperator<IterationRecord<?>, Void> {
+public class MiniBatchTailOperator extends AbstractStreamOperator<Void>
+        implements OneInputStreamOperator<MiniBatchRecord<?>, Void> {
 
     private final IterationID iterationId;
 
@@ -53,11 +51,11 @@ public class TailOperator extends AbstractStreamOperator<Void>
     private transient MailboxExecutor mailboxExecutor;
 
     /** We distinguish how the record is processed according to if objectReuse is enabled. */
-    private transient Consumer<IterationRecord<?>> recordConsumer;
+    private transient Consumer<MiniBatchRecord<?>> recordConsumer;
 
-    private transient FeedbackChannel<IterationRecord<?>> channel;
+    private transient FeedbackChannel<MiniBatchRecord<?>> channel;
 
-    public TailOperator(IterationID iterationId, int feedbackIndex) {
+    public MiniBatchTailOperator(IterationID iterationId, int feedbackIndex) {
         this.iterationId = Objects.requireNonNull(iterationId);
         this.feedbackIndex = feedbackIndex;
         this.chainingStrategy = ChainingStrategy.ALWAYS;
@@ -75,6 +73,7 @@ public class TailOperator extends AbstractStreamOperator<Void>
     @Override
     public void open() throws Exception {
         super.open();
+
         channel =
                 new RecordwiseFeedbackChannelProvider()
                         .getProducerChannel(
@@ -95,14 +94,18 @@ public class TailOperator extends AbstractStreamOperator<Void>
     }
 
     @Override
-    public void processElement(StreamRecord<IterationRecord<?>> streamRecord) {
+    public void processElement(StreamRecord<MiniBatchRecord<?>> streamRecord) {
         recordConsumer.accept(streamRecord.getValue());
     }
 
     @Override
     public void prepareSnapshotPreBarrier(long checkpointId) throws Exception {
         super.prepareSnapshotPreBarrier(checkpointId);
-        channel.put(IterationRecord.newBarrier(checkpointId));
+
+        MiniBatchRecord<?> miniBatchRecord = new MiniBatchRecord<>();
+        miniBatchRecord.getRecords().add(IterationRecord.newBarrier(checkpointId));
+        miniBatchRecord.getTimestamps().add(null);
+        channel.put(miniBatchRecord);
     }
 
     @Override
@@ -124,9 +127,9 @@ public class TailOperator extends AbstractStreamOperator<Void>
         }
     }
 
-    private void processIfObjectReuseEnabled(IterationRecord<?> record) {
+    private void processIfObjectReuseEnabled(MiniBatchRecord<?> record) {
         // Since the record would be reused, we have to clone a new one
-        record.incrementEpoch();
+        record.getRecords().forEach(IterationRecord::incrementEpoch);
         try {
             channel.put(record);
         } catch (Exception exception) {

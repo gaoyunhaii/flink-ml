@@ -19,37 +19,17 @@
 package org.apache.flink.iteration;
 
 import org.apache.flink.annotation.Experimental;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.api.java.typeutils.GenericTypeInfo;
-import org.apache.flink.iteration.compile.DraftExecutionEnvironment;
-import org.apache.flink.iteration.operator.HeadOperator;
-import org.apache.flink.iteration.operator.HeadOperatorFactory;
-import org.apache.flink.iteration.operator.InputOperator;
 import org.apache.flink.iteration.operator.OperatorWrapper;
-import org.apache.flink.iteration.operator.OutputOperator;
-import org.apache.flink.iteration.operator.ReplayOperator;
-import org.apache.flink.iteration.operator.TailOperator;
 import org.apache.flink.iteration.operator.allround.AllRoundOperatorWrapper;
 import org.apache.flink.iteration.operator.perround.PerRoundOperatorWrapper;
-import org.apache.flink.iteration.typeinfo.IterationRecordTypeInfo;
 import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.co.CoProcessFunction;
-import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
-import org.apache.flink.streaming.api.transformations.OneInputTransformation;
-import org.apache.flink.util.Collector;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
-import java.util.function.BiFunction;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-
-import static org.apache.flink.util.Preconditions.checkState;
 
 /**
  * A helper class to create iterations. To construct an iteration, Users are required to provide
@@ -117,14 +97,15 @@ public class Iterations {
      */
     public static DataStreamList iterateUnboundedStreams(
             DataStreamList initVariableStreams, DataStreamList dataStreams, IterationBody body) {
-        return createIteration(
+        // Currently mini-batch not supported for unbounded stream.
+        IterationTopologyBuilder builder = new RecordwiseIterationTopologyBuilder();
+        return builder.createIteration(
                 initVariableStreams,
                 dataStreams,
                 Collections.emptySet(),
                 body,
                 new AllRoundOperatorWrapper(),
-                false,
-                1 /* Currently we first not support mini-batch for unbounded iterations */);
+                false);
     }
 
     /**
@@ -161,427 +142,17 @@ public class Iterations {
                         .boxed()
                         .collect(Collectors.toSet());
 
-        return createIteration(
+        IterationTopologyBuilder builder =
+                config.getMiniBatchRecords() == 1
+                        ? new RecordwiseIterationTopologyBuilder()
+                        : new MiniBatchIterationTopologyBuilder(config.getMiniBatchRecords());
+
+        return builder.createIteration(
                 initVariableStreams,
                 new DataStreamList(allDatastreams),
                 replayedIndices,
                 body,
                 wrapper,
-                true,
-                config.getMiniBatchRecords());
-    }
-
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static DataStreamList createIteration(
-            DataStreamList initVariableStreams,
-            DataStreamList dataStreams,
-            Set<Integer> replayedDataStreamIndices,
-            IterationBody body,
-            OperatorWrapper<?, IterationRecord<?>> initialOperatorWrapper,
-            boolean mayHaveCriteria,
-            int miniBatchRecords) {
-        checkState(initVariableStreams.size() > 0, "There should be at least one variable stream");
-
-        IterationID iterationId = new IterationID();
-
-        List<TypeInformation<?>> initVariableTypeInfos = getTypeInfos(initVariableStreams);
-        List<TypeInformation<?>> dataStreamTypeInfos = getTypeInfos(dataStreams);
-
-        // Add heads and inputs
-        int totalInitVariableParallelism =
-                map(
-                                initVariableStreams,
-                                dataStream ->
-                                        dataStream.getParallelism() > 0
-                                                ? dataStream.getParallelism()
-                                                : dataStream
-                                                        .getExecutionEnvironment()
-                                                        .getConfig()
-                                                        .getParallelism())
-                        .stream()
-                        .mapToInt(i -> i)
-                        .sum();
-        DataStreamList initVariableInputs = addInputs(initVariableStreams);
-        DataStreamList headStreams =
-                addHeads(
-                        initVariableStreams,
-                        initVariableInputs,
-                        iterationId,
-                        totalInitVariableParallelism,
-                        false,
-                        0);
-
-        DataStreamList dataStreamInputs = addInputs(dataStreams);
-        if (replayedDataStreamIndices.size() > 0) {
-            dataStreamInputs =
-                    addReplayer(
-                            headStreams.get(0),
-                            dataStreams,
-                            dataStreamInputs,
-                            replayedDataStreamIndices);
-        }
-
-        // Creates the iteration body. We map the inputs of iteration body into the draft sources,
-        // which serve as the start points to build the draft subgraph.
-        StreamExecutionEnvironment env = initVariableStreams.get(0).getExecutionEnvironment();
-        DraftExecutionEnvironment draftEnv =
-                new DraftExecutionEnvironment(env, initialOperatorWrapper);
-        DataStreamList draftHeadStreams =
-                addDraftSources(headStreams, draftEnv, initVariableTypeInfos);
-        DataStreamList draftDataStreamInputs =
-                addDraftSources(dataStreamInputs, draftEnv, dataStreamTypeInfos);
-
-        IterationBodyResult iterationBodyResult =
-                body.process(draftHeadStreams, draftDataStreamInputs);
-        ensuresTransformationAdded(iterationBodyResult.getFeedbackVariableStreams(), draftEnv);
-        ensuresTransformationAdded(iterationBodyResult.getOutputStreams(), draftEnv);
-        draftEnv.copyToActualEnvironment();
-
-        // Adds tails and co-locate them with the heads.
-        DataStreamList feedbackStreams =
-                getActualDataStreams(iterationBodyResult.getFeedbackVariableStreams(), draftEnv);
-        checkState(
-                feedbackStreams.size() == initVariableStreams.size(),
-                "The number of feedback streams "
-                        + feedbackStreams.size()
-                        + " does not match the initialized one "
-                        + initVariableStreams.size());
-        for (int i = 0; i < feedbackStreams.size(); ++i) {
-            checkState(
-                    feedbackStreams.get(i).getParallelism() == headStreams.get(i).getParallelism(),
-                    String.format(
-                            "The feedback stream %d have different parallelism %d with the initial stream, which is %d",
-                            i,
-                            feedbackStreams.get(i).getParallelism(),
-                            headStreams.get(i).getParallelism()));
-        }
-
-        DataStreamList tails = addTails(feedbackStreams, iterationId, 0);
-        for (int i = 0; i < headStreams.size(); ++i) {
-            String coLocationGroupKey = "co-" + iterationId.toHexString() + "-" + i;
-            headStreams.get(i).getTransformation().setCoLocationGroupKey(coLocationGroupKey);
-            tails.get(i).getTransformation().setCoLocationGroupKey(coLocationGroupKey);
-        }
-
-        List<DataStream<?>> tailsAndCriteriaTails = new ArrayList<>(tails.getDataStreams());
-        checkState(
-                mayHaveCriteria || iterationBodyResult.getTerminationCriteria() == null,
-                "The current iteration type does not support the termination criteria.");
-
-        if (iterationBodyResult.getTerminationCriteria() != null) {
-            DataStreamList criteriaTails =
-                    addCriteriaStream(
-                            iterationBodyResult.getTerminationCriteria(),
-                            iterationId,
-                            env,
-                            draftEnv,
-                            initVariableStreams,
-                            headStreams,
-                            totalInitVariableParallelism);
-            tailsAndCriteriaTails.addAll(criteriaTails.getDataStreams());
-        }
-
-        DataStream<Object> tailsUnion =
-                unionAllTails(env, new DataStreamList(tailsAndCriteriaTails));
-
-        return addOutputs(
-                getActualDataStreams(iterationBodyResult.getOutputStreams(), draftEnv), tailsUnion);
-    }
-
-    private static DataStreamList addReplayer(
-            DataStream<?> firstHeadStream,
-            DataStreamList originalDataStreams,
-            DataStreamList dataStreamInputs,
-            Set<Integer> replayedDataStreamIndices) {
-
-        List<DataStream<?>> result = new ArrayList<>(dataStreamInputs.size());
-        for (int i = 0; i < dataStreamInputs.size(); ++i) {
-            if (!replayedDataStreamIndices.contains(i)) {
-                result.add(dataStreamInputs.get(i));
-                continue;
-            }
-
-            // Notes that the HeadOperator would broadcast the globally aligned events,
-            // thus the operator does not require emit to the sideoutput specially.
-            DataStream<?> replayedInput =
-                    dataStreamInputs
-                            .get(i)
-                            .connect(
-                                    ((SingleOutputStreamOperator<IterationRecord<?>>)
-                                                    firstHeadStream)
-                                            .getSideOutput(HeadOperator.ALIGN_NOTIFY_OUTPUT_TAG)
-                                            .broadcast())
-                            .transform(
-                                    "Replayer-"
-                                            + originalDataStreams
-                                                    .get(i)
-                                                    .getTransformation()
-                                                    .getName(),
-                                    dataStreamInputs.get(i).getType(),
-                                    (TwoInputStreamOperator) new ReplayOperator<>())
-                            .setParallelism(dataStreamInputs.get(i).getParallelism());
-            result.add(replayedInput);
-        }
-
-        return new DataStreamList(result);
-    }
-
-    private static DataStreamList addCriteriaStream(
-            DataStream<?> draftCriteriaStream,
-            IterationID iterationId,
-            StreamExecutionEnvironment env,
-            DraftExecutionEnvironment draftEnv,
-            DataStreamList initVariableStreams,
-            DataStreamList headStreams,
-            int totalInitVariableParallelism) {
-        // Deals with the criteria streams
-        DataStream<?> terminationCriteria = draftEnv.getActualStream(draftCriteriaStream.getId());
-        // It should always has the IterationRecordTypeInfo
-        checkState(
-                terminationCriteria.getType().getClass().equals(IterationRecordTypeInfo.class),
-                "The termination criteria should always return IterationRecord.");
-        TypeInformation<?> innerType =
-                ((IterationRecordTypeInfo<?>) terminationCriteria.getType()).getInnerTypeInfo();
-
-        DataStream<?> emptyCriteriaSource =
-                env.addSource(new DraftExecutionEnvironment.EmptySource())
-                        .returns(innerType)
-                        .name(terminationCriteria.getTransformation().getName())
-                        .setParallelism(terminationCriteria.getParallelism());
-        DataStreamList criteriaSources = DataStreamList.of(emptyCriteriaSource);
-        DataStreamList criteriaInputs = addInputs(criteriaSources);
-        DataStreamList criteriaHeaders =
-                addHeads(
-                        criteriaSources,
-                        criteriaInputs,
-                        iterationId,
-                        totalInitVariableParallelism,
-                        true,
-                        initVariableStreams.size());
-
-        // Merges the head and the actual criteria stream. This is required since if we have
-        // no edges from the criteria head to the criteria tail, the tail might directly received
-        // the MAX_EPOCH_WATERMARK without the synchronization of the head.
-        DataStream<?> mergedHeadAndCriteria =
-                mergeCriteriaHeadAndCriteriaStream(
-                        env, criteriaHeaders.get(0), terminationCriteria, innerType);
-        DataStreamList criteriaTails =
-                addTails(
-                        DataStreamList.of(mergedHeadAndCriteria),
-                        iterationId,
-                        initVariableStreams.size());
-
-        String coLocationGroupKey = "co-" + iterationId.toHexString() + "-cri";
-        criteriaHeaders.get(0).getTransformation().setCoLocationGroupKey(coLocationGroupKey);
-        criteriaTails.get(0).getTransformation().setCoLocationGroupKey(coLocationGroupKey);
-
-        // Now we notify all the head operators to count the criteria streams.
-        setCriteriaParallelism(headStreams, terminationCriteria.getParallelism());
-        setCriteriaParallelism(criteriaHeaders, terminationCriteria.getParallelism());
-
-        return criteriaTails;
-    }
-
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static DataStream<?> mergeCriteriaHeadAndCriteriaStream(
-            StreamExecutionEnvironment env,
-            DataStream<?> head,
-            DataStream<?> criteriaStream,
-            TypeInformation<?> criteriaStreamType) {
-        DraftExecutionEnvironment criteriaDraftEnv =
-                new DraftExecutionEnvironment(env, new AllRoundOperatorWrapper<>());
-        DataStream draftHeadStream = criteriaDraftEnv.addDraftSource(head, criteriaStreamType);
-        DataStream draftTerminationCriteria =
-                criteriaDraftEnv.addDraftSource(criteriaStream, criteriaStreamType);
-        DataStream draftMergedStream =
-                draftHeadStream
-                        .connect(draftTerminationCriteria)
-                        .process(new CriteriaMergeProcessor())
-                        .returns(criteriaStreamType)
-                        .setParallelism(
-                                criteriaStream.getParallelism() > 0
-                                        ? criteriaStream.getParallelism()
-                                        : env.getConfig().getParallelism())
-                        .name("criteria-merge");
-        criteriaDraftEnv.copyToActualEnvironment();
-        return criteriaDraftEnv.getActualStream(draftMergedStream.getId());
-    }
-
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static DataStream<Object> unionAllTails(
-            StreamExecutionEnvironment env, DataStreamList tailsAndCriteriaTails) {
-        return Iterations.<DataStream>map(
-                        tailsAndCriteriaTails,
-                        tail ->
-                                tail.filter(r -> false)
-                                        .name("filter-tail")
-                                        .returns(new GenericTypeInfo(Object.class))
-                                        .setParallelism(
-                                                tail.getParallelism() > 0
-                                                        ? tail.getParallelism()
-                                                        : env.getConfig().getParallelism()))
-                .stream()
-                .reduce(DataStream::union)
-                .get();
-    }
-
-    private static List<TypeInformation<?>> getTypeInfos(DataStreamList dataStreams) {
-        return map(dataStreams, DataStream::getType);
-    }
-
-    private static DataStreamList addInputs(DataStreamList dataStreams) {
-        return new DataStreamList(
-                map(
-                        dataStreams,
-                        dataStream ->
-                                dataStream
-                                        .transform(
-                                                "input-" + dataStream.getTransformation().getName(),
-                                                new IterationRecordTypeInfo<>(
-                                                        dataStream.getType(), true),
-                                                new InputOperator())
-                                        .setParallelism(dataStream.getParallelism())));
-    }
-
-    private static DataStreamList addHeads(
-            DataStreamList variableStreams,
-            DataStreamList inputStreams,
-            IterationID iterationId,
-            int totalInitVariableParallelism,
-            boolean isCriteriaStream,
-            int startHeaderIndex) {
-
-        return new DataStreamList(
-                map(
-                        inputStreams,
-                        (index, dataStream) ->
-                                ((SingleOutputStreamOperator<IterationRecord<?>>) dataStream)
-                                        .transform(
-                                                "head-"
-                                                        + variableStreams
-                                                                .get(index)
-                                                                .getTransformation()
-                                                                .getName(),
-                                                (IterationRecordTypeInfo) dataStream.getType(),
-                                                new HeadOperatorFactory(
-                                                        iterationId,
-                                                        startHeaderIndex + index,
-                                                        isCriteriaStream,
-                                                        totalInitVariableParallelism))
-                                        .setParallelism(dataStream.getParallelism())));
-    }
-
-    private static DataStreamList addTails(
-            DataStreamList dataStreams, IterationID iterationId, int startIndex) {
-        return new DataStreamList(
-                map(
-                        dataStreams,
-                        (index, dataStream) ->
-                                ((DataStream<IterationRecord<?>>) dataStream)
-                                        .transform(
-                                                "tail-" + dataStream.getTransformation().getName(),
-                                                new IterationRecordTypeInfo(
-                                                        dataStream.getType(), true),
-                                                new TailOperator(iterationId, startIndex + index))
-                                        .setParallelism(dataStream.getParallelism())));
-    }
-
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static DataStreamList addOutputs(DataStreamList dataStreams, DataStream tailsUnion) {
-        return new DataStreamList(
-                map(
-                        dataStreams,
-                        (index, dataStream) -> {
-                            IterationRecordTypeInfo<?> inputType =
-                                    (IterationRecordTypeInfo<?>) dataStream.getType();
-                            return dataStream
-                                    .union(
-                                            tailsUnion
-                                                    .map(x -> x)
-                                                    .name(
-                                                            "tail-map-"
-                                                                    + dataStream
-                                                                            .getTransformation()
-                                                                            .getName())
-                                                    .returns(inputType)
-                                                    .setParallelism(1))
-                                    .transform(
-                                            "output-" + dataStream.getTransformation().getName(),
-                                            inputType.getInnerTypeInfo(),
-                                            new OutputOperator())
-                                    .setParallelism(dataStream.getParallelism());
-                        }));
-    }
-
-    private static DataStreamList addDraftSources(
-            DataStreamList dataStreams,
-            DraftExecutionEnvironment draftEnv,
-            List<TypeInformation<?>> typeInfos) {
-
-        return new DataStreamList(
-                map(
-                        dataStreams,
-                        (index, dataStream) ->
-                                draftEnv.addDraftSource(dataStream, typeInfos.get(index))));
-    }
-
-    private static void ensuresTransformationAdded(
-            DataStreamList dataStreams, DraftExecutionEnvironment draftEnv) {
-        map(
-                dataStreams,
-                dataStream -> {
-                    draftEnv.addOperatorIfNotExists(dataStream.getTransformation());
-                    return null;
-                });
-    }
-
-    private static void setCriteriaParallelism(
-            DataStreamList headStreams, int criteriaParallelism) {
-        map(
-                headStreams,
-                dataStream -> {
-                    ((HeadOperatorFactory)
-                                    ((OneInputTransformation) dataStream.getTransformation())
-                                            .getOperatorFactory())
-                            .setCriteriaStreamParallelism(criteriaParallelism);
-                    return null;
-                });
-    }
-
-    private static DataStreamList getActualDataStreams(
-            DataStreamList draftStreams, DraftExecutionEnvironment draftEnv) {
-        return new DataStreamList(
-                map(draftStreams, dataStream -> draftEnv.getActualStream(dataStream.getId())));
-    }
-
-    private static <R> List<R> map(DataStreamList dataStreams, Function<DataStream<?>, R> mapper) {
-        return map(dataStreams, (i, dataStream) -> mapper.apply(dataStream));
-    }
-
-    private static <R> List<R> map(
-            DataStreamList dataStreams, BiFunction<Integer, DataStream<?>, R> mapper) {
-        List<R> results = new ArrayList<>(dataStreams.size());
-        for (int i = 0; i < dataStreams.size(); ++i) {
-            DataStream<?> dataStream = dataStreams.get(i);
-            results.add(mapper.apply(i, dataStream));
-        }
-
-        return results;
-    }
-
-    private static class CriteriaMergeProcessor extends CoProcessFunction<Object, Object, Object> {
-
-        @Override
-        public void processElement1(Object value, Context ctx, Collector<Object> out)
-                throws Exception {
-            // Ignores all the records from the head side-output.
-        }
-
-        @Override
-        public void processElement2(Object value, Context ctx, Collector<Object> out)
-                throws Exception {
-            // Bypasses all the records from the actual criteria stream.
-            out.collect(value);
-        }
+                true);
     }
 }

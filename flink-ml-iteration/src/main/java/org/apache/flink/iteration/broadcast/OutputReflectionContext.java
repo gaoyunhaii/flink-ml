@@ -38,6 +38,7 @@ public class OutputReflectionContext {
     private final Class<?> chainingOutputClass;
     private final Field chainingOutputTagField;
 
+    private final Field recordWriterOutputTagField;
     private final Field recordWriterField;
     private final Field recordWriterSerializationDelegateField;
     private final Field serializationDelegateSerializerField;
@@ -55,6 +56,8 @@ public class OutputReflectionContext {
             this.chainingOutputTagField =
                     ReflectionUtils.getClassField(chainingOutputClass, "outputTag");
 
+            this.recordWriterOutputTagField =
+                    ReflectionUtils.getClassField(RecordWriterOutput.class, "outputTag");
             this.recordWriterField =
                     ReflectionUtils.getClassField(RecordWriterOutput.class, "recordWriter");
             this.recordWriterSerializationDelegateField =
@@ -85,6 +88,10 @@ public class OutputReflectionContext {
 
     public OutputTag<?> getChainingOutputTag(Object output) {
         return ReflectionUtils.getFieldValue(output, chainingOutputTagField);
+    }
+
+    public OutputTag<?> getRecordWriterOutputTag(Object output) {
+        return ReflectionUtils.getFieldValue(output, recordWriterOutputTagField);
     }
 
     @SuppressWarnings("unchecked")

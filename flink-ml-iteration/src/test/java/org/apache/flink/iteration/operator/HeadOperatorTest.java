@@ -39,8 +39,9 @@ import org.apache.flink.runtime.operators.coordination.OperatorEvent;
 import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
 import org.apache.flink.runtime.state.CheckpointStorageLocationReference;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
-import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannelBroker;
+import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
+import org.apache.flink.statefun.flink.core.feedback.RecordwiseFeedbackChannelProvider;
 import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
@@ -926,7 +927,12 @@ public class HeadOperatorTest extends TestLogger {
                 boolean isCriteriaStream,
                 int totalHeadParallelism,
                 OperatorEventGatewayFactory operatorEventGatewayFactory) {
-            super(iterationId, feedbackIndex, isCriteriaStream, totalHeadParallelism);
+            super(
+                    iterationId,
+                    feedbackIndex,
+                    isCriteriaStream,
+                    totalHeadParallelism,
+                    new RecordwiseFeedbackChannelProvider());
             this.operatorEventGatewayFactory = operatorEventGatewayFactory;
         }
 

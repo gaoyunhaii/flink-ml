@@ -26,6 +26,7 @@ import org.apache.flink.iteration.operator.coordinator.HeadOperatorCoordinator;
 import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.operators.coordination.OperatorCoordinator;
 import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
+import org.apache.flink.statefun.flink.core.feedback.IterationFeedbackChannelProvider;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.ChainingStrategy;
 import org.apache.flink.streaming.api.operators.CoordinatedOperatorFactory;
@@ -51,16 +52,20 @@ public class HeadOperatorFactory extends AbstractStreamOperatorFactory<Iteration
 
     private final int totalInitialVariableParallelism;
 
+    private final IterationFeedbackChannelProvider feedbackChannelProvider;
+
     private int criteriaStreamParallelism;
 
     public HeadOperatorFactory(
             IterationID iterationId,
             int feedbackIndex,
             boolean isCriteriaStream,
-            int totalInitialVariableParallelism) {
+            int totalInitialVariableParallelism,
+            IterationFeedbackChannelProvider feedbackChannelProvider) {
         this.iterationId = iterationId;
         this.feedbackIndex = feedbackIndex;
         this.isCriteriaStream = isCriteriaStream;
+        this.feedbackChannelProvider = feedbackChannelProvider;
 
         checkArgument(
                 totalInitialVariableParallelism > 0,
@@ -94,7 +99,8 @@ public class HeadOperatorFactory extends AbstractStreamOperatorFactory<Iteration
                         isCriteriaStream,
                         mailboxExecutor,
                         createOperatorEventGateway(streamOperatorParameters),
-                        streamOperatorParameters.getProcessingTimeService());
+                        streamOperatorParameters.getProcessingTimeService(),
+                        feedbackChannelProvider);
         headOperator.setup(
                 streamOperatorParameters.getContainingTask(),
                 streamOperatorParameters.getStreamConfig(),

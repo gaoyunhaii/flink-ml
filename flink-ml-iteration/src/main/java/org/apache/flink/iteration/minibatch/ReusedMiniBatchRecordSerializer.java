@@ -42,6 +42,10 @@ public class ReusedMiniBatchRecordSerializer<T> extends TypeSerializer<MiniBatch
         this.reused = new MiniBatchRecord<>();
     }
 
+    public ReusedIterationRecordSerializer<T> getIterationRecordSerializer() {
+        return iterationRecordSerializer;
+    }
+
     @Override
     public boolean isImmutableType() {
         return false;

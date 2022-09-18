@@ -35,6 +35,10 @@ public class MiniBatchRecordTypeInfo<T> extends TypeInformation<MiniBatchRecord<
         this.iterationRecordTypeInfo = iterationRecordTypeInfo;
     }
 
+    public IterationRecordTypeInfo<T> getIterationRecordTypeInfo() {
+        return iterationRecordTypeInfo;
+    }
+
     @Override
     public boolean isBasicType() {
         return false;
