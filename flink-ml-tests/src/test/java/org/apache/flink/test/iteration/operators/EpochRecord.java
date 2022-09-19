@@ -53,6 +53,6 @@ public class EpochRecord {
 
     @Override
     public String toString() {
-        return super.toString() + "EpochRecord{" + "epoch=" + epoch + ", value=" + value + '}';
+        return super.toString() + " {" + "epoch=" + epoch + ", value=" + value + '}';
     }
 }

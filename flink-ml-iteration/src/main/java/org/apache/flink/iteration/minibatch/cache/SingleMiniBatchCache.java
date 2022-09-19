@@ -45,7 +45,7 @@ public class SingleMiniBatchCache implements MiniBatchCache {
 
     private int nextIterationRecordToUse;
 
-    private final TypeSerializer<IterationRecord<?>> iterationRecordSerializer;
+    private final TypeSerializer serializer;
 
     public SingleMiniBatchCache(
             Output<StreamRecord<MiniBatchRecord<?>>> innerOutput,
@@ -67,8 +67,9 @@ public class SingleMiniBatchCache implements MiniBatchCache {
         nextIterationRecordToUse = 0;
 
         checkState(typeSerializer instanceof ReusedMiniBatchRecordSerializer);
-        iterationRecordSerializer =
-                ((ReusedMiniBatchRecordSerializer) typeSerializer).getIterationRecordSerializer();
+        this.serializer =
+                (((ReusedMiniBatchRecordSerializer) typeSerializer).getIterationRecordSerializer())
+                        .getInnerSerializer();
     }
 
     @Override
@@ -77,7 +78,12 @@ public class SingleMiniBatchCache implements MiniBatchCache {
         IterationRecord reusedIterationRecord =
                 reusedIterationRecords.get(nextIterationRecordToUse++);
 
-        iterationRecordSerializer.copy(iterationRecord, reusedIterationRecord);
+        // Let's deal with the serializer
+        reusedIterationRecord.setType(iterationRecord.getType());
+        reusedIterationRecord.setEpoch(iterationRecord.getEpoch());
+        reusedIterationRecord.setValue(iterationRecord.getValue());
+        reusedIterationRecord.setSender(iterationRecord.getSender());
+        reusedIterationRecord.setCheckpointId(iterationRecord.getCheckpointId());
 
         reused.getValue().addRecord(reusedIterationRecord, timestamp);
         if (reused.getValue().getSize() >= miniBatchRecords) {
