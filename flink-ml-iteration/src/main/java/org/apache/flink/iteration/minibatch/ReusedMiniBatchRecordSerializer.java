@@ -109,18 +109,19 @@ public class ReusedMiniBatchRecordSerializer<T> extends TypeSerializer<MiniBatch
     @Override
     public void serialize(MiniBatchRecord<T> miniBatchRecord, DataOutputView dataOutputView)
             throws IOException {
-        dataOutputView.writeInt(miniBatchRecord.getRecords().size());
-        for (int i = 0; i < reused.getTimestamps().size(); ++i) {
-            if (reused.getTimestamps().get(i) != null) {
-                dataOutputView.write(0);
-                dataOutputView.writeLong(reused.getTimestamps().get(i));
+        dataOutputView.writeInt(miniBatchRecord.getSize());
+        for (int i = 0; i < miniBatchRecord.getSize(); ++i) {
+            if (miniBatchRecord.getTimestamps().get(i) != null) {
+                dataOutputView.writeByte(0);
+                dataOutputView.writeLong(miniBatchRecord.getTimestamps().get(i));
             } else {
-                dataOutputView.write(1);
+                dataOutputView.writeByte(1);
             }
         }
 
-        for (int i = 0; i < reused.getRecords().size(); ++i) {
-            iterationRecordSerializer.serialize(reused.getRecords().get(i), dataOutputView);
+        for (int i = 0; i < miniBatchRecord.getSize(); ++i) {
+            iterationRecordSerializer.serialize(
+                    miniBatchRecord.getRecords().get(i), dataOutputView);
         }
     }
 

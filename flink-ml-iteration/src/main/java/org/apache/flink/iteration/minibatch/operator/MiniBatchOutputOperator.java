@@ -54,7 +54,7 @@ public class MiniBatchOutputOperator<T> extends AbstractStreamOperator<T>
                     reusable.setTimestamp(timestamp);
                 }
 
-                reusable.replace(streamRecord.getValue().getRecords().get(i));
+                reusable.replace(streamRecord.getValue().getRecords().get(i).getValue());
                 output.collect(reusable);
             }
         }

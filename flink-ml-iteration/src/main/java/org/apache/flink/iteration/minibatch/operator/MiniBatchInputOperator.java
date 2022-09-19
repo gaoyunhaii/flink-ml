@@ -18,10 +18,13 @@
 
 package org.apache.flink.iteration.minibatch.operator;
 
+import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
+import org.apache.flink.iteration.minibatch.cache.SingleMiniBatchCache;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.ChainingStrategy;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
+import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 
 public class MiniBatchInputOperator<T> extends AbstractStreamOperator<MiniBatchRecord<T>>
@@ -29,7 +32,9 @@ public class MiniBatchInputOperator<T> extends AbstractStreamOperator<MiniBatchR
 
     private final int miniBatchRecords;
 
-    private transient StreamRecord<MiniBatchRecord<T>> reusable;
+    private transient IterationRecord<T> reused;
+
+    private transient SingleMiniBatchCache miniBatchCache;
 
     public MiniBatchInputOperator(int miniBatchRecords) {
         this.miniBatchRecords = miniBatchRecords;
@@ -39,11 +44,25 @@ public class MiniBatchInputOperator<T> extends AbstractStreamOperator<MiniBatchR
     @Override
     public void open() throws Exception {
         super.open();
-        this.reusable = new StreamRecord<>(new MiniBatchRecord<>());
+        this.reused = IterationRecord.newRecord(null, 0);
+        this.miniBatchCache = new SingleMiniBatchCache((Output) output, null, miniBatchRecords, -1);
     }
 
     @Override
     public void processElement(StreamRecord<T> streamRecord) throws Exception {
+        //        System.out.println(
+        //                Thread.currentThread()
+        //                        + "input "
+        //                        + streamRecord.getValue()
+        //                        + ", "
+        //                        + miniBatchRecords);
+        reused.setValue(streamRecord.getValue());
+        miniBatchCache.collect(
+                reused, streamRecord.hasTimestamp() ? streamRecord.getTimestamp() : null);
+    }
 
+    @Override
+    public void finish() throws Exception {
+        miniBatchCache.flush();
     }
 }

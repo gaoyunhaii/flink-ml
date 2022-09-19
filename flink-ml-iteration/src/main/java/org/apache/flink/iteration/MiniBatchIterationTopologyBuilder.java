@@ -96,7 +96,8 @@ public class MiniBatchIterationTopologyBuilder extends IterationTopologyBuilder 
                                                                 startHeaderIndex + index,
                                                                 isCriteriaStream,
                                                                 totalInitVariableParallelism,
-                                                                new MiniBatchFeedbackChannelProvider()), miniBatchRecords))
+                                                                new MiniBatchFeedbackChannelProvider()),
+                                                        miniBatchRecords))
                                         .setParallelism(dataStream.getParallelism())));
     }
 
@@ -206,6 +207,11 @@ public class MiniBatchIterationTopologyBuilder extends IterationTopologyBuilder 
                         super.setCurrentWrapper(
                                 new MiniBatchOperatorWrapper<>(
                                         (OperatorWrapper) newWrapper, miniBatchRecords));
+
+                if (existing == null) {
+                    return null;
+                }
+
                 checkState(existing instanceof MiniBatchOperatorWrapper);
                 return ((MiniBatchOperatorWrapper) existing).getIterationWrapper();
             }

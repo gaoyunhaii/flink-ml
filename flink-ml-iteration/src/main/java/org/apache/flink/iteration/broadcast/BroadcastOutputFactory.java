@@ -62,6 +62,11 @@ public class BroadcastOutputFactory {
     private static <OUT> BroadcastOutput<OUT> createInternalBroadcastOutput(
             Output<StreamRecord<OUT>> rawOutput, OutputReflectionContext outputReflectionContext) {
 
+        // Special path to allows the other wrapper to re-implement the broadcasting outside.
+        if (rawOutput instanceof BroadcastOutput) {
+            return (BroadcastOutput<OUT>) rawOutput;
+        }
+
         if (outputReflectionContext.isChainingOutput(rawOutput)) {
             OutputTag<?> outputTag = outputReflectionContext.getChainingOutputTag(rawOutput);
             return new ChainingBroadcastOutput<>(rawOutput, outputTag);

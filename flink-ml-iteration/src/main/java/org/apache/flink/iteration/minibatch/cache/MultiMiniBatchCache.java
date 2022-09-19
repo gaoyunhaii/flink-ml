@@ -24,6 +24,7 @@ import org.apache.flink.runtime.plugable.SerializationDelegate;
 import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.runtime.partitioner.StreamPartitioner;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.util.OutputTag;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -38,6 +39,7 @@ public class MultiMiniBatchCache implements MiniBatchCache {
 
     public MultiMiniBatchCache(
             Output<StreamRecord<MiniBatchRecord<?>>> innerOutput,
+            OutputTag<?> tag,
             StreamPartitioner<?> partitioner,
             int numberOfChannels,
             int miniBatchRecords) {
@@ -45,7 +47,7 @@ public class MultiMiniBatchCache implements MiniBatchCache {
 
         this.caches = new ArrayList<>();
         for (int i = 0; i < numberOfChannels; ++i) {
-            caches.add(new SingleMiniBatchCache(innerOutput, miniBatchRecords, i));
+            caches.add(new SingleMiniBatchCache(innerOutput, tag, miniBatchRecords, i));
         }
 
         serializationDelegate = new SerializationDelegate<>(null);

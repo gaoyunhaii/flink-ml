@@ -20,11 +20,15 @@ package org.apache.flink.iteration.minibatch;
 
 import org.apache.flink.iteration.IterationRecord;
 
+import org.apache.commons.lang3.StringUtils;
+
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 /** Which contains a list of iteration records. We force it to contains only one type of records. */
-public class MiniBatchRecord<T> {
+public class MiniBatchRecord<T> implements Serializable {
 
     private transient int targetPartition;
 
@@ -92,9 +96,11 @@ public class MiniBatchRecord<T> {
         return "MiniBatchRecord{"
                 + "targetPartition="
                 + targetPartition
-                + ", records="
-                + records
-                + ", timestamps ="
+                + ", records=[\n"
+                + StringUtils.join(
+                        records.stream().map(r -> "\t" + r.toString()).collect(Collectors.toList()),
+                        "\n")
+                + "], timestamps ="
                 + timestamps
                 + '}';
     }

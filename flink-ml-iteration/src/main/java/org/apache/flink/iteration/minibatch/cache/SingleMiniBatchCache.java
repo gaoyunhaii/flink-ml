@@ -22,37 +22,72 @@ import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
 import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.util.OutputTag;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class SingleMiniBatchCache implements MiniBatchCache {
 
     private final Output<StreamRecord<MiniBatchRecord<?>>> innerOutput;
 
+    private final OutputTag<?> tag;
+
     private final int miniBatchRecords;
 
     private final StreamRecord<MiniBatchRecord<?>> reused;
 
+    private final List<IterationRecord<?>> reusedIterationRecords;
+
+    private int nextIterationRecordToUse;
+
     public SingleMiniBatchCache(
             Output<StreamRecord<MiniBatchRecord<?>>> innerOutput,
+            OutputTag<?> tag,
             int miniBatchRecords,
             int targetPartition) {
         this.innerOutput = innerOutput;
+        this.tag = tag;
         this.miniBatchRecords = miniBatchRecords;
+
         reused = new StreamRecord<>(new MiniBatchRecord<>());
         reused.getValue().setTargetPartition(targetPartition);
+
+        reusedIterationRecords = new ArrayList<>(miniBatchRecords);
+        for (int i = 0; i < miniBatchRecords; ++i) {
+            reusedIterationRecords.add(IterationRecord.newRecord(null, 0));
+        }
+        nextIterationRecordToUse = 0;
     }
 
     @Override
     public void collect(IterationRecord<?> iterationRecord, Long timestamp) {
-        reused.getValue().addRecord((IterationRecord) iterationRecord, timestamp);
+        IterationRecord reusedIterationRecord =
+                reusedIterationRecords.get(nextIterationRecordToUse++);
+        reusedIterationRecord.from(iterationRecord);
+
+        reused.getValue().addRecord(reusedIterationRecord, timestamp);
         if (reused.getValue().getSize() >= miniBatchRecords) {
-            innerOutput.collect(reused);
+            if (this.tag == null) {
+                innerOutput.collect(reused);
+            } else {
+                innerOutput.collect((OutputTag) tag, reused);
+            }
             reused.getValue().clear();
+            nextIterationRecordToUse = 0;
         }
     }
 
     @Override
     public void flush() {
-        innerOutput.collect(reused);
-        reused.getValue().clear();
+        if (reused.getValue().getSize() > 0) {
+            if (this.tag == null) {
+                innerOutput.collect(reused);
+            } else {
+                innerOutput.collect((OutputTag) tag, reused);
+            }
+            reused.getValue().clear();
+            nextIterationRecordToUse = 0;
+        }
     }
 }

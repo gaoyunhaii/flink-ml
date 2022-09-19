@@ -19,11 +19,14 @@
 package org.apache.flink.iteration.minibatch.cache;
 
 import org.apache.flink.iteration.IterationRecord;
+import org.apache.flink.iteration.broadcast.BroadcastOutput;
+import org.apache.flink.iteration.broadcast.BroadcastOutputFactory;
 import org.apache.flink.iteration.broadcast.OutputReflectionContext;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
 import org.apache.flink.iteration.minibatch.proxy.MiniBatchCalculatedStreamPartitioner;
-import org.apache.flink.iteration.proxy.ProxyOutput;
+import org.apache.flink.iteration.minibatch.proxy.MiniBatchProxyStreamPartitioner;
 import org.apache.flink.iteration.utils.ReflectionUtils;
+import org.apache.flink.metrics.Counter;
 import org.apache.flink.runtime.io.network.api.writer.ChannelSelectorRecordWriter;
 import org.apache.flink.runtime.io.network.api.writer.RecordWriter;
 import org.apache.flink.streaming.api.operators.Output;
@@ -38,6 +41,7 @@ import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus;
 import org.apache.flink.util.OutputTag;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -46,7 +50,8 @@ import java.util.Map;
 import static org.apache.flink.util.Preconditions.checkState;
 
 /** Cache a mini-batch of records. */
-public class MiniBatchedOutput<T> implements Output<StreamRecord<IterationRecord<T>>> {
+public class MiniBatchedOutput<T>
+        implements Output<StreamRecord<IterationRecord<T>>>, BroadcastOutput<IterationRecord<T>> {
 
     private final Output<StreamRecord<MiniBatchRecord<T>>> output;
 
@@ -54,65 +59,111 @@ public class MiniBatchedOutput<T> implements Output<StreamRecord<IterationRecord
 
     private final Map<String, MiniBatchCache> taggedMiniBatchCaches;
 
+    private final BroadcastOutput<MiniBatchRecord<T>> broadcastOutput;
+
     public MiniBatchedOutput(
-            Output<StreamRecord<MiniBatchRecord<T>>> output, int miniBatchRecords) {
+            Output<StreamRecord<MiniBatchRecord<T>>> output,
+            int miniBatchRecords,
+            Counter outputCounter) {
         this.output = output;
 
-        // Now it's time to build up the cache structure for each wrapped output
-        checkState(output instanceof ProxyOutput);
-        Output<?> recordLevelOutput =
-                ReflectionUtils.getFieldValue(output, ProxyOutput.class, "output");
         OutputReflectionContext reflectionContext = new OutputReflectionContext();
-        Output[] innerOutputs = reflectionContext.getBroadcastingInternalOutputs(recordLevelOutput);
 
-        // Now let's acquire the stream partitioner for each output.
-        OutputTag[] tags = new OutputTag[innerOutputs.length];
-        StreamPartitioner[] partitioners = new StreamPartitioner[innerOutputs.length];
-        int[] numberOfChannels = new int[innerOutputs.length];
-
-        for (int i = 0; i < innerOutputs.length; ++i) {
-            if (reflectionContext.isChainingOutput(innerOutputs[i])) {
-                tags[i] = reflectionContext.getChainingOutputTag(innerOutputs[i]);
-                partitioners[i] = null;
-            } else if (reflectionContext.isRecordWriterOutput(innerOutputs[i])) {
-                tags[i] = reflectionContext.getRecordWriterOutputTag(innerOutputs[i]);
-                RecordWriter recordWriter =
-                        ReflectionUtils.getFieldValue(
-                                innerOutputs[i], RecordWriterOutput.class, "recordWriter");
-                MiniBatchCalculatedStreamPartitioner channelSelector =
-                        ReflectionUtils.getFieldValue(
-                                recordWriter, ChannelSelectorRecordWriter.class, "channelSelector");
-                partitioners[i] = channelSelector.getWrappedStreamPartitioner();
-                numberOfChannels[i] = channelSelector.getNumberOfChannels();
-                checkState(numberOfChannels[i] >= 1, "The number of channels is not set");
-            } else {
-                throw new RuntimeException("Unknown output type: " + innerOutputs[i].getClass());
+        List<OutputContext> contexts = new ArrayList<>();
+        if (reflectionContext.isChainingOutput(output)) {
+            contexts.add(buildChainedOutputContext(output, reflectionContext));
+        } else if (reflectionContext.isRecordWriterOutput(output)) {
+            contexts.add(buildRecordWriterOutputContext(output, reflectionContext));
+        } else if (reflectionContext.isBroadcastingOutput(output)) {
+            Output[] innerOutputs = reflectionContext.getBroadcastingInternalOutputs(output);
+            for (int i = 0; i < innerOutputs.length; ++i) {
+                if (reflectionContext.isChainingOutput(innerOutputs[i])) {
+                    contexts.add(buildChainedOutputContext(innerOutputs[i], reflectionContext));
+                } else if (reflectionContext.isRecordWriterOutput(innerOutputs[i])) {
+                    contexts.add(
+                            buildRecordWriterOutputContext(innerOutputs[i], reflectionContext));
+                } else {
+                    throw new RuntimeException(
+                            "Unknown output type: " + innerOutputs[i].getClass());
+                }
             }
+        } else {
+            throw new RuntimeException("Unknown output type: " + output.getClass());
         }
 
         nonTaggedMiniBatchCaches = new ArrayList<>();
         taggedMiniBatchCaches = new HashMap<>();
-        for (int i = 0; i < innerOutputs.length; ++i) {
+        for (int i = 0; i < contexts.size(); ++i) {
             MiniBatchCache cache;
-            if (partitioners[i] == null
-                    || partitioners[i] instanceof ForwardPartitioner
-                    || partitioners[i] instanceof RescalePartitioner
-                    || partitioners[i] instanceof RebalancePartitioner) {
-                cache = new SingleMiniBatchCache(innerOutputs[i], miniBatchRecords, -1);
+            if (!contexts.get(i).isCalculated) {
+                cache =
+                        new SingleMiniBatchCache(
+                                contexts.get(i).output,
+                                contexts.get(i).outputTag,
+                                miniBatchRecords,
+                                -1);
             } else {
                 cache =
                         new MultiMiniBatchCache(
-                                innerOutputs[i],
-                                partitioners[i],
-                                numberOfChannels[i],
+                                contexts.get(i).output,
+                                contexts.get(i).outputTag,
+                                contexts.get(i).partitioner,
+                                contexts.get(i).numberOfChannels,
                                 miniBatchRecords);
             }
 
-            if (tags[i] == null) {
+            if (contexts.get(i).outputTag == null) {
                 nonTaggedMiniBatchCaches.add(cache);
             } else {
-                taggedMiniBatchCaches.put(tags[i].getId(), cache);
+                taggedMiniBatchCaches.put(contexts.get(i).outputTag.getId(), cache);
             }
+        }
+
+        this.broadcastOutput = BroadcastOutputFactory.createBroadcastOutput(output, outputCounter);
+    }
+
+    private OutputContext buildChainedOutputContext(
+            Output<?> output, OutputReflectionContext reflectionContext) {
+        return new OutputContext(
+                reflectionContext.getChainingOutputTag(output), null, 1, output, false);
+    }
+
+    private OutputContext buildRecordWriterOutputContext(
+            Output<?> output, OutputReflectionContext reflectionContext) {
+        RecordWriter recordWriter =
+                ReflectionUtils.getFieldValue(output, RecordWriterOutput.class, "recordWriter");
+        StreamPartitioner channelSelector =
+                ReflectionUtils.getFieldValue(
+                        recordWriter, ChannelSelectorRecordWriter.class, "channelSelector");
+
+        if (channelSelector instanceof MiniBatchProxyStreamPartitioner) {
+            return new OutputContext(
+                    reflectionContext.getRecordWriterOutputTag(output),
+                    ((MiniBatchProxyStreamPartitioner) channelSelector)
+                            .getWrappedStreamPartitioner(),
+                    ((MiniBatchProxyStreamPartitioner) channelSelector).getNumberOfChannels(),
+                    output,
+                    false);
+        } else if (channelSelector instanceof MiniBatchCalculatedStreamPartitioner) {
+            return new OutputContext(
+                    reflectionContext.getRecordWriterOutputTag(output),
+                    ((MiniBatchCalculatedStreamPartitioner) channelSelector)
+                            .getWrappedStreamPartitioner(),
+                    ((MiniBatchCalculatedStreamPartitioner) channelSelector).getNumberOfChannels(),
+                    output,
+                    false);
+        } else if (channelSelector instanceof ForwardPartitioner
+                || channelSelector instanceof RescalePartitioner
+                || channelSelector instanceof RebalancePartitioner) {
+            return new OutputContext(
+                    reflectionContext.getRecordWriterOutputTag(output),
+                    channelSelector,
+                    1,
+                    output,
+                    false);
+        } else {
+            throw new RuntimeException(
+                    "unsupported channel selector: " + channelSelector.getClass());
         }
     }
 
@@ -163,5 +214,46 @@ public class MiniBatchedOutput<T> implements Output<StreamRecord<IterationRecord
     @Override
     public void close() {
         output.close();
+    }
+
+    @Override
+    public void broadcastEmit(StreamRecord<IterationRecord<T>> record) throws IOException {
+        IterationRecord iterationRecord = record.getValue();
+
+        // flush all
+        for (MiniBatchCache cache : nonTaggedMiniBatchCaches) {
+            cache.flush();
+        }
+
+        for (Map.Entry<String, MiniBatchCache> entry : taggedMiniBatchCaches.entrySet()) {
+            entry.getValue().flush();
+        }
+
+        // Directly output them
+        MiniBatchRecord<T> tmp = new MiniBatchRecord<>();
+        tmp.addRecord(iterationRecord, record.hasTimestamp() ? record.getTimestamp() : null);
+        broadcastOutput.broadcastEmit(new StreamRecord<>(tmp));
+    }
+
+    private static class OutputContext {
+        final OutputTag outputTag;
+        final StreamPartitioner partitioner;
+        final int numberOfChannels;
+        final Output output;
+        final boolean isCalculated;
+
+        public OutputContext(
+                OutputTag outputTag,
+                StreamPartitioner partitioner,
+                int numberOfChannels,
+                Output output,
+                boolean isCalculated) {
+            checkState(numberOfChannels >= 1, "Number of channels not set");
+            this.outputTag = outputTag;
+            this.partitioner = partitioner;
+            this.numberOfChannels = numberOfChannels;
+            this.output = output;
+            this.isCalculated = isCalculated;
+        }
     }
 }

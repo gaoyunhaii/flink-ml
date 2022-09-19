@@ -116,7 +116,7 @@ public class DraftExecutionEnvironment extends StreamExecutionEnvironment {
         }
         setBufferTimeout(actualEnv.getBufferTimeout());
 
-        this.currentWrapper = initialWrapper;
+        setCurrentWrapper(initialWrapper);
     }
 
     public OperatorWrapper<?, ?> setCurrentWrapper(OperatorWrapper<?, ?> newWrapper) {

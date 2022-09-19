@@ -39,19 +39,19 @@ public class IterationOptions {
     public static final ConfigOption<MemorySize> FEEDBACK_IN_MEMORY_BUFFER_SIZE =
             key("iteration.feedback.in-memory.buffer-size")
                     .memoryType()
-                    .defaultValue(MemorySize.ofMebiBytes(16))
+                    .defaultValue(MemorySize.ofMebiBytes(4))
                     .withDescription("The total size of in-memory queue");
 
     public static final ConfigOption<MemorySize> FEEDBACK_WRITE_BUFFER_SIZE =
             key("iteration.feedback.write.buffer-size")
                     .memoryType()
-                    .defaultValue(MemorySize.ofMebiBytes(2))
+                    .defaultValue(MemorySize.ofMebiBytes(1))
                     .withDescription("Write buffer size");
 
     public static final ConfigOption<MemorySize> FEEDBACK_READ_BUFFER_SIZE =
             key("iteration.feedback.read.buffer-size")
                     .memoryType()
-                    .defaultValue(MemorySize.ofMebiBytes(2))
+                    .defaultValue(MemorySize.ofMebiBytes(1))
                     .withDescription("Read buffer size");
 
     public static final ConfigOption<FeedbackType> FEEDBACK_CHANNEL_TYPE =

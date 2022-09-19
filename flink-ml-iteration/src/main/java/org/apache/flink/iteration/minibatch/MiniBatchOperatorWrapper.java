@@ -21,11 +21,13 @@ package org.apache.flink.iteration.minibatch;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.iteration.IterationRecord;
+import org.apache.flink.iteration.minibatch.cache.MultiMiniBatchCache;
 import org.apache.flink.iteration.minibatch.operator.wrapper.MultiInputMiniBatchWrapperOperator;
 import org.apache.flink.iteration.minibatch.operator.wrapper.OneInputMiniBatchWrapperOperator;
 import org.apache.flink.iteration.minibatch.operator.wrapper.TwoInputMiniBatchWrapperOperator;
-import org.apache.flink.iteration.minibatch.proxy.MiniBatchProxyKeySelector;
 import org.apache.flink.iteration.minibatch.proxy.MiniBatchCalculatedStreamPartitioner;
+import org.apache.flink.iteration.minibatch.proxy.MiniBatchProxyKeySelector;
+import org.apache.flink.iteration.minibatch.proxy.MiniBatchProxyStreamPartitioner;
 import org.apache.flink.iteration.operator.OperatorWrapper;
 import org.apache.flink.iteration.operator.WrapperOperatorFactory;
 import org.apache.flink.iteration.typeinfo.IterationRecordTypeInfo;
@@ -35,6 +37,9 @@ import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
+import org.apache.flink.streaming.runtime.partitioner.ForwardPartitioner;
+import org.apache.flink.streaming.runtime.partitioner.RebalancePartitioner;
+import org.apache.flink.streaming.runtime.partitioner.RescalePartitioner;
 import org.apache.flink.streaming.runtime.partitioner.StreamPartitioner;
 import org.apache.flink.util.OutputTag;
 
@@ -109,7 +114,15 @@ public class MiniBatchOperatorWrapper<T> implements OperatorWrapper<T, MiniBatch
     @Override
     public StreamPartitioner<MiniBatchRecord<T>> wrapStreamPartitioner(
             StreamPartitioner<T> streamPartitioner) {
-        return new MiniBatchCalculatedStreamPartitioner<>(streamPartitioner);
+
+        if (streamPartitioner == null
+                || streamPartitioner instanceof ForwardPartitioner
+                || streamPartitioner instanceof RescalePartitioner
+                || streamPartitioner instanceof RebalancePartitioner) {
+            return new MiniBatchProxyStreamPartitioner<>(streamPartitioner);
+        } else {
+            return new MiniBatchProxyStreamPartitioner<>(streamPartitioner);
+        }
     }
 
     @Override

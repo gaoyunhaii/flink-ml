@@ -156,18 +156,15 @@ public class ReusedIterationRecordSerializer<T> extends TypeSerializer<Iteration
     public IterationRecord<T> deserialize(IterationRecord<T> reuse, DataInputView source)
             throws IOException {
         int type = source.readByte();
-        int epoch = deserializeNumber(source);
+        // int epoch = deserializeNumber(source);
+        int epoch = source.readInt();
 
         reuse.setType(IterationRecord.Type.values()[type]);
         reuse.setEpoch(epoch);
 
         switch (reuse.getType()) {
             case RECORD:
-                if (reuse.getValue() != null) {
-                    innerSerializer.deserialize(reuse.getValue(), source);
-                } else {
-                    reuse.setValue(innerSerializer.deserialize(source));
-                }
+                reuse.setValue(innerSerializer.deserialize(reuse.getValue(), source));
                 return reuse;
             case EPOCH_WATERMARK:
                 reuse.setSender(StringSerializer.INSTANCE.deserialize(source));

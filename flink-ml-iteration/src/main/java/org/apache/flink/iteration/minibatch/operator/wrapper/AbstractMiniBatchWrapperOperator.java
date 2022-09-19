@@ -31,6 +31,7 @@ import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.apache.flink.runtime.state.CheckpointStreamFactory;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.BoundedMultiInput;
+import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OperatorSnapshotFutures;
 import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.api.operators.StreamOperator;
@@ -49,7 +50,7 @@ import java.util.Objects;
 /** Base class for mini-batch wrapper */
 public abstract class AbstractMiniBatchWrapperOperator<
                 T, S extends StreamOperator<IterationRecord<T>>>
-        implements StreamOperator<MiniBatchRecord<T>>, BoundedMultiInput {
+        implements StreamOperator<MiniBatchRecord<T>>, BoundedOneInput, BoundedMultiInput {
 
     private static final Logger LOG =
             LoggerFactory.getLogger(AbstractMiniBatchWrapperOperator.class);
@@ -63,6 +64,8 @@ public abstract class AbstractMiniBatchWrapperOperator<
     protected final StreamOperatorFactory<IterationRecord<T>> operatorFactory;
 
     protected final Output<StreamRecord<MiniBatchRecord<T>>> providedOutput;
+
+    protected final MiniBatchedOutput<T> miniBatchedOutput;
 
     protected final S wrappedOperator;
 
@@ -78,18 +81,24 @@ public abstract class AbstractMiniBatchWrapperOperator<
         this.containingTask = Objects.requireNonNull(parameters.getContainingTask());
         this.providedOutput = Objects.requireNonNull(parameters.getOutput());
         this.operatorFactory = Objects.requireNonNull(operatorFactory);
+
+        this.metrics = createOperatorMetricGroup(containingTask.getEnvironment(), streamConfig);
+
+        this.miniBatchedOutput =
+                new MiniBatchedOutput<>(
+                        providedOutput,
+                        miniBatchRecords,
+                        metrics.getIOMetricGroup().getNumRecordsOutCounter());
         this.wrappedOperator =
                 (S)
                         StreamOperatorFactoryUtil.<IterationRecord<T>, S>createOperator(
                                         operatorFactory,
                                         (StreamTask) parameters.getContainingTask(),
-                                        OperatorUtils.createWrappedOperatorConfig(
+                                        OperatorUtils.createWrappedMiniBatchOperatorConfig(
                                                 parameters.getStreamConfig()),
-                                        new MiniBatchedOutput<>(providedOutput, miniBatchRecords),
+                                        miniBatchedOutput,
                                         parameters.getOperatorEventDispatcher())
                                 .f0;
-
-        this.metrics = createOperatorMetricGroup(containingTask.getEnvironment(), streamConfig);
     }
 
     private InternalOperatorMetricGroup createOperatorMetricGroup(
@@ -138,6 +147,12 @@ public abstract class AbstractMiniBatchWrapperOperator<
     }
 
     @Override
+    public void endInput() throws Exception {
+        OperatorUtils.processOperatorOrUdfIfSatisfy(
+                wrappedOperator, BoundedOneInput.class, (boundedInput) -> boundedInput.endInput());
+    }
+
+    @Override
     public void endInput(int index) throws Exception {
         OperatorUtils.processOperatorOrUdfIfSatisfy(
                 wrappedOperator,
@@ -157,7 +172,7 @@ public abstract class AbstractMiniBatchWrapperOperator<
 
     @Override
     public OperatorMetricGroup getMetricGroup() {
-        return wrappedOperator.getMetricGroup();
+        return metrics;
     }
 
     @Override

@@ -23,6 +23,7 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.iteration.IterationID;
 import org.apache.flink.iteration.config.IterationOptions;
+import org.apache.flink.iteration.minibatch.proxy.MiniBatchProxyKeySelector;
 import org.apache.flink.iteration.proxy.ProxyKeySelector;
 import org.apache.flink.iteration.utils.ReflectionUtils;
 import org.apache.flink.runtime.jobgraph.OperatorID;
@@ -102,6 +103,27 @@ public class OperatorUtils {
                                 + keySelector);
                 wrappedConfig.setStatePartitioner(
                         i, ((ProxyKeySelector) keySelector).getWrappedKeySelector());
+            }
+        }
+
+        return wrappedConfig;
+    }
+
+    public static StreamConfig createWrappedMiniBatchOperatorConfig(StreamConfig wrapperConfig) {
+        StreamConfig wrappedConfig = new StreamConfig(wrapperConfig.getConfiguration().clone());
+        for (int i = 0; i < wrappedConfig.getNumberOfNetworkInputs(); ++i) {
+            KeySelector keySelector =
+                    wrapperConfig.getStatePartitioner(i, OperatorUtils.class.getClassLoader());
+            if (keySelector != null) {
+                checkState(
+                        keySelector instanceof MiniBatchProxyKeySelector,
+                        "The state partitioner for the wrapper operator should always be ProxyKeySelector, but it is "
+                                + keySelector);
+                wrappedConfig.setStatePartitioner(
+                        i,
+                        new ProxyKeySelector<>(
+                                ((MiniBatchProxyKeySelector<Object, Object>) keySelector)
+                                        .getWrappedKeySelector()));
             }
         }
 
