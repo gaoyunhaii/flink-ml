@@ -30,6 +30,7 @@ import org.apache.flink.metrics.Counter;
 import org.apache.flink.runtime.io.network.api.writer.BroadcastRecordWriter;
 import org.apache.flink.runtime.io.network.api.writer.ChannelSelectorRecordWriter;
 import org.apache.flink.runtime.io.network.api.writer.RecordWriter;
+import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.io.RecordWriterOutput;
@@ -44,7 +45,6 @@ import org.apache.flink.util.OutputTag;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -66,7 +66,8 @@ public class MiniBatchedOutput<T>
     public MiniBatchedOutput(
             Output<StreamRecord<MiniBatchRecord<T>>> output,
             int miniBatchRecords,
-            Counter outputCounter) {
+            Counter outputCounter,
+            StreamConfig streamConfig) {
         this.output = output;
 
         OutputReflectionContext reflectionContext = new OutputReflectionContext();
@@ -103,7 +104,13 @@ public class MiniBatchedOutput<T>
                                 contexts.get(i).output,
                                 contexts.get(i).outputTag,
                                 miniBatchRecords,
-                                -1);
+                                -1,
+                                contexts.get(i).outputTag == null
+                                        ? streamConfig.getTypeSerializerOut(
+                                                getClass().getClassLoader())
+                                        : streamConfig.getTypeSerializerSideOut(
+                                                contexts.get(i).outputTag,
+                                                getClass().getClassLoader()));
             } else {
                 cache =
                         new MultiMiniBatchCache(
@@ -111,7 +118,13 @@ public class MiniBatchedOutput<T>
                                 contexts.get(i).outputTag,
                                 contexts.get(i).partitioner,
                                 contexts.get(i).numberOfChannels,
-                                miniBatchRecords);
+                                miniBatchRecords,
+                                contexts.get(i).outputTag == null
+                                        ? streamConfig.getTypeSerializerOut(
+                                                getClass().getClassLoader())
+                                        : streamConfig.getTypeSerializerSideOut(
+                                                contexts.get(i).outputTag,
+                                                getClass().getClassLoader()));
             }
 
             if (contexts.get(i).outputTag == null) {

@@ -90,14 +90,14 @@ public class BoundedAllRoundStreamIterationITCase extends TestLogger {
     @Test(timeout = 60000)
     public void testSyncVariableOnlyBoundedIteration() throws Exception {
         JobGraph jobGraph =
-                createVariableOnlyJobGraph(4, 1000, false, 0, true, 4, null, false, result);
+                createVariableOnlyJobGraph(4, 10, false, 0, true, 4, null, false, result);
         miniCluster.executeJobBlocking(jobGraph);
 
         assertEquals(6, result.get().size());
         Map<Integer, Tuple2<Integer, Integer>> roundsStat =
                 computeRoundStat(result.get(), OutputRecord.Event.EPOCH_WATERMARK_INCREMENTED, 5);
 
-        verifyResult(roundsStat, 5, 1, 4 * (0 + 999) * 1000 / 2);
+        verifyResult(roundsStat, 5, 1, 4 * (0 + 9) * 10 / 2);
         assertEquals(OutputRecord.Event.TERMINATED, result.get().take().getEvent());
     }
 

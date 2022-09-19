@@ -88,7 +88,8 @@ public abstract class AbstractMiniBatchWrapperOperator<
                 new MiniBatchedOutput<>(
                         providedOutput,
                         miniBatchRecords,
-                        metrics.getIOMetricGroup().getNumRecordsOutCounter());
+                        metrics.getIOMetricGroup().getNumRecordsOutCounter(),
+                        streamConfig);
         this.wrappedOperator =
                 (S)
                         StreamOperatorFactoryUtil.<IterationRecord<T>, S>createOperator(

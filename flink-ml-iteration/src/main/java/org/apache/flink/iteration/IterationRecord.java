@@ -119,14 +119,6 @@ public class IterationRecord<T> implements Cloneable, Serializable {
         this.checkpointId = checkpointId;
     }
 
-    public void from(IterationRecord<T> other) {
-        this.type = other.type;
-        this.epoch = other.epoch;
-        this.value = other.value;
-        this.sender = other.sender;
-        this.checkpointId = other.checkpointId;
-    }
-
     @Override
     public IterationRecord<T> clone() {
         switch (type) {

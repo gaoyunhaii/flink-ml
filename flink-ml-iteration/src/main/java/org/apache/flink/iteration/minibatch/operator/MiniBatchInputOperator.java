@@ -45,7 +45,13 @@ public class MiniBatchInputOperator<T> extends AbstractStreamOperator<MiniBatchR
     public void open() throws Exception {
         super.open();
         this.reused = IterationRecord.newRecord(null, 0);
-        this.miniBatchCache = new SingleMiniBatchCache((Output) output, null, miniBatchRecords, -1);
+        this.miniBatchCache =
+                new SingleMiniBatchCache(
+                        (Output) output,
+                        null,
+                        miniBatchRecords,
+                        -1,
+                        config.getTypeSerializerOut(getClass().getClassLoader()));
     }
 
     @Override

@@ -18,6 +18,7 @@
 
 package org.apache.flink.iteration.minibatch.cache;
 
+import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
 import org.apache.flink.runtime.plugable.SerializationDelegate;
@@ -42,12 +43,15 @@ public class MultiMiniBatchCache implements MiniBatchCache {
             OutputTag<?> tag,
             StreamPartitioner<?> partitioner,
             int numberOfChannels,
-            int miniBatchRecords) {
+            int miniBatchRecords,
+            TypeSerializer<?> outputTypeSerializer) {
         this.partitioner = partitioner;
 
         this.caches = new ArrayList<>();
         for (int i = 0; i < numberOfChannels; ++i) {
-            caches.add(new SingleMiniBatchCache(innerOutput, tag, miniBatchRecords, i));
+            caches.add(
+                    new SingleMiniBatchCache(
+                            innerOutput, tag, miniBatchRecords, i, outputTypeSerializer));
         }
 
         serializationDelegate = new SerializationDelegate<>(null);

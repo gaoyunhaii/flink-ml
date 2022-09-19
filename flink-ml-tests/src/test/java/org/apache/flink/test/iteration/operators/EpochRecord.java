@@ -50,4 +50,9 @@ public class EpochRecord {
     public void setValue(int value) {
         this.value = value;
     }
+
+    @Override
+    public String toString() {
+        return super.toString() + "EpochRecord{" + "epoch=" + epoch + ", value=" + value + '}';
+    }
 }

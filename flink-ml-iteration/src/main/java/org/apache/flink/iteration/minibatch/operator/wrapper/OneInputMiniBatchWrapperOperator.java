@@ -48,7 +48,7 @@ public class OneInputMiniBatchWrapperOperator<IN, OUT>
 
     @Override
     public void processElement(StreamRecord<MiniBatchRecord<IN>> streamRecord) throws Exception {
-        // System.out.println(getOperatorID() + " is processing " + streamRecord);
+        // System.out.println(Thread.currentThread().getName() + " is processing " + streamRecord);
         for (IterationRecord<IN> record : streamRecord.getValue().getRecords()) {
             reused.replace(record);
             wrappedOperator.setKeyContextElement(reused);

@@ -18,14 +18,18 @@
 
 package org.apache.flink.iteration.minibatch.cache;
 
+import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
+import org.apache.flink.iteration.minibatch.ReusedMiniBatchRecordSerializer;
 import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.util.OutputTag;
 
 import java.util.ArrayList;
 import java.util.List;
+
+import static org.apache.flink.util.Preconditions.checkState;
 
 public class SingleMiniBatchCache implements MiniBatchCache {
 
@@ -41,11 +45,14 @@ public class SingleMiniBatchCache implements MiniBatchCache {
 
     private int nextIterationRecordToUse;
 
+    private final TypeSerializer<IterationRecord<?>> iterationRecordSerializer;
+
     public SingleMiniBatchCache(
             Output<StreamRecord<MiniBatchRecord<?>>> innerOutput,
             OutputTag<?> tag,
             int miniBatchRecords,
-            int targetPartition) {
+            int targetPartition,
+            TypeSerializer<?> typeSerializer) {
         this.innerOutput = innerOutput;
         this.tag = tag;
         this.miniBatchRecords = miniBatchRecords;
@@ -58,13 +65,19 @@ public class SingleMiniBatchCache implements MiniBatchCache {
             reusedIterationRecords.add(IterationRecord.newRecord(null, 0));
         }
         nextIterationRecordToUse = 0;
+
+        checkState(typeSerializer instanceof ReusedMiniBatchRecordSerializer);
+        iterationRecordSerializer =
+                ((ReusedMiniBatchRecordSerializer) typeSerializer).getIterationRecordSerializer();
     }
 
     @Override
     public void collect(IterationRecord<?> iterationRecord, Long timestamp) {
+        checkState(nextIterationRecordToUse < reusedIterationRecords.size());
         IterationRecord reusedIterationRecord =
                 reusedIterationRecords.get(nextIterationRecordToUse++);
-        reusedIterationRecord.from(iterationRecord);
+
+        iterationRecordSerializer.copy(iterationRecord, reusedIterationRecord);
 
         reused.getValue().addRecord(reusedIterationRecord, timestamp);
         if (reused.getValue().getSize() >= miniBatchRecords) {
