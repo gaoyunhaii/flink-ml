@@ -20,6 +20,8 @@ package org.apache.flink.iteration.minibatch.operator.wrapper;
 
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
+import org.apache.flink.iteration.operator.OperatorUtils;
+import org.apache.flink.streaming.api.operators.BoundedMultiInput;
 import org.apache.flink.streaming.api.operators.StreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
@@ -34,7 +36,8 @@ public class TwoInputMiniBatchWrapperOperator<IN1, IN2, OUT>
                 TwoInputStreamOperator<
                         IterationRecord<IN1>, IterationRecord<IN2>, IterationRecord<OUT>>>
         implements TwoInputStreamOperator<
-                MiniBatchRecord<IN1>, MiniBatchRecord<IN2>, MiniBatchRecord<OUT>> {
+                        MiniBatchRecord<IN1>, MiniBatchRecord<IN2>, MiniBatchRecord<OUT>>,
+                BoundedMultiInput {
 
     private final StreamRecord<IterationRecord<IN1>> reusedInput1;
 
@@ -95,5 +98,13 @@ public class TwoInputMiniBatchWrapperOperator<IN1, IN2, OUT>
     @Override
     public void processWatermarkStatus2(WatermarkStatus watermarkStatus) throws Exception {
         wrappedOperator.processWatermarkStatus2(watermarkStatus);
+    }
+
+    @Override
+    public void endInput(int index) throws Exception {
+        OperatorUtils.processOperatorOrUdfIfSatisfy(
+                wrappedOperator,
+                BoundedMultiInput.class,
+                (boundedInput) -> boundedInput.endInput(index));
     }
 }

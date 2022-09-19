@@ -18,11 +18,13 @@
 
 package org.apache.flink.iteration.operator;
 
+import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.iteration.IterationID;
 import org.apache.flink.iteration.config.IterationOptions;
+import org.apache.flink.iteration.minibatch.ReusedMiniBatchRecordSerializer;
 import org.apache.flink.iteration.minibatch.proxy.MiniBatchProxyKeySelector;
 import org.apache.flink.iteration.proxy.ProxyKeySelector;
 import org.apache.flink.iteration.utils.ReflectionUtils;
@@ -126,6 +128,13 @@ public class OperatorUtils {
                                         .getWrappedKeySelector()));
             }
         }
+
+        TypeSerializer<Object> miniBatchRecordSerializer =
+                wrapperConfig.getTypeSerializerOut(OperatorUtils.class.getClassLoader());
+        checkState(miniBatchRecordSerializer instanceof ReusedMiniBatchRecordSerializer);
+        wrappedConfig.setTypeSerializerOut(
+                ((ReusedMiniBatchRecordSerializer) miniBatchRecordSerializer)
+                        .getIterationRecordSerializer());
 
         return wrappedConfig;
     }

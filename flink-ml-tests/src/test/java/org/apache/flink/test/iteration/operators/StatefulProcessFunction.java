@@ -41,6 +41,7 @@ public class StatefulProcessFunction<T> extends KeyedProcessFunction<Integer, T,
 
     @Override
     public void processElement(T value, Context ctx, Collector<T> out) throws Exception {
+        System.out.println("Stateful processing " + value);
         if (state.value() == null) {
             state.update(0);
 

@@ -20,6 +20,7 @@ package org.apache.flink.iteration.minibatch.operator.wrapper;
 
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
+import org.apache.flink.iteration.operator.OperatorUtils;
 import org.apache.flink.streaming.api.operators.BoundedMultiInput;
 import org.apache.flink.streaming.api.operators.Input;
 import org.apache.flink.streaming.api.operators.MultipleInputStreamOperator;
@@ -36,7 +37,7 @@ import java.util.List;
 public class MultiInputMiniBatchWrapperOperator<OUT>
         extends AbstractMiniBatchWrapperOperator<
                 OUT, MultipleInputStreamOperator<IterationRecord<OUT>>>
-        implements MultipleInputStreamOperator<MiniBatchRecord<OUT>> {
+        implements MultipleInputStreamOperator<MiniBatchRecord<OUT>>, BoundedMultiInput {
 
     public MultiInputMiniBatchWrapperOperator(
             StreamOperatorParameters<MiniBatchRecord<OUT>> parameters,
@@ -71,12 +72,11 @@ public class MultiInputMiniBatchWrapperOperator<OUT>
     }
 
     @Override
-    public void endInput(int i) throws Exception {
-        super.endInput(i);
-
-        if (wrappedOperator instanceof BoundedMultiInput) {
-            ((BoundedMultiInput) wrappedOperator).endInput(i);
-        }
+    public void endInput(int index) throws Exception {
+        OperatorUtils.processOperatorOrUdfIfSatisfy(
+                wrappedOperator,
+                BoundedMultiInput.class,
+                (boundedInput) -> boundedInput.endInput(index));
     }
 
     private class ProxyInput<IN> implements Input<MiniBatchRecord<IN>> {

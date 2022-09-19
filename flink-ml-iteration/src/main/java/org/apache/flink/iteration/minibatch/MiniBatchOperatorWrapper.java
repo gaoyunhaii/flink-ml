@@ -121,7 +121,7 @@ public class MiniBatchOperatorWrapper<T> implements OperatorWrapper<T, MiniBatch
                 || streamPartitioner instanceof RebalancePartitioner) {
             return new MiniBatchProxyStreamPartitioner<>(streamPartitioner);
         } else {
-            return new MiniBatchProxyStreamPartitioner<>(streamPartitioner);
+            return new MiniBatchCalculatedStreamPartitioner<>(streamPartitioner);
         }
     }
 

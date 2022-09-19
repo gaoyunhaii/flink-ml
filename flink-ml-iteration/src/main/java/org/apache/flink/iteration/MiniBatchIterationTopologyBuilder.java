@@ -18,6 +18,7 @@
 
 package org.apache.flink.iteration;
 
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.iteration.compile.DraftExecutionEnvironment;
 import org.apache.flink.iteration.minibatch.MiniBatchOperatorWrapper;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
@@ -36,6 +37,7 @@ import org.apache.flink.statefun.flink.core.feedback.MiniBatchFeedbackChannelPro
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.util.OutputTag;
 
 import java.util.ArrayList;
@@ -216,5 +218,29 @@ public class MiniBatchIterationTopologyBuilder extends IterationTopologyBuilder 
                 return ((MiniBatchOperatorWrapper) existing).getIterationWrapper();
             }
         };
+    }
+
+    @Override
+    protected TypeInformation<?> unwrapTypeInfo(TypeInformation<?> wrappedTypeInfo) {
+        // It should always has the IterationRecordTypeInfo
+        checkState(
+                wrappedTypeInfo instanceof MiniBatchRecordTypeInfo,
+                "The termination criteria should always return IterationRecord.");
+        return ((MiniBatchRecordTypeInfo<?>) wrappedTypeInfo)
+                .getIterationRecordTypeInfo()
+                .getInnerTypeInfo();
+    }
+
+    @Override
+    protected void setCriteriaParallelism(DataStreamList headStreams, int criteriaParallelism) {
+        map(
+                headStreams,
+                dataStream -> {
+                    (((MiniBatchHeadOperatorWrapperFactory)
+                                    ((OneInputTransformation) dataStream.getTransformation())
+                                            .getOperatorFactory()))
+                            .setCriteriaStreamParallelism(criteriaParallelism);
+                    return null;
+                });
     }
 }

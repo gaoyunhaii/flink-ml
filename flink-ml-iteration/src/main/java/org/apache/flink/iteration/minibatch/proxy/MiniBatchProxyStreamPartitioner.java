@@ -68,6 +68,7 @@ public class MiniBatchProxyStreamPartitioner<T> extends StreamPartitioner<MiniBa
     @Override
     public void setup(int numberOfChannels) {
         super.setup(numberOfChannels);
+        wrappedStreamPartitioner.setup(numberOfChannels);
         this.numberOfChannels = numberOfChannels;
     }
 

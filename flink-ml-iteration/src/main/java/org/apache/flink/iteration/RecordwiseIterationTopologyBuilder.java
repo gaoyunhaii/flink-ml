@@ -18,6 +18,7 @@
 
 package org.apache.flink.iteration;
 
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.iteration.compile.DraftExecutionEnvironment;
 import org.apache.flink.iteration.operator.HeadOperator;
 import org.apache.flink.iteration.operator.HeadOperatorFactory;
@@ -32,10 +33,13 @@ import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
+import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+
+import static org.apache.flink.util.Preconditions.checkState;
 
 public class RecordwiseIterationTopologyBuilder extends IterationTopologyBuilder {
 
@@ -171,5 +175,27 @@ public class RecordwiseIterationTopologyBuilder extends IterationTopologyBuilder
             StreamExecutionEnvironment env,
             OperatorWrapper<?, IterationRecord<?>> initialOperatorWrapper) {
         return new DraftExecutionEnvironment(env, initialOperatorWrapper);
+    }
+
+    @Override
+    protected TypeInformation<?> unwrapTypeInfo(TypeInformation<?> wrappedTypeInfo) {
+        // It should always has the IterationRecordTypeInfo
+        checkState(
+                wrappedTypeInfo instanceof IterationRecordTypeInfo,
+                "The termination criteria should always return IterationRecord.");
+        return ((IterationRecordTypeInfo<?>) wrappedTypeInfo).getInnerTypeInfo();
+    }
+
+    @Override
+    protected void setCriteriaParallelism(DataStreamList headStreams, int criteriaParallelism) {
+        map(
+                headStreams,
+                dataStream -> {
+                    ((HeadOperatorFactory)
+                                    ((OneInputTransformation) dataStream.getTransformation())
+                                            .getOperatorFactory())
+                            .setCriteriaStreamParallelism(criteriaParallelism);
+                    return null;
+                });
     }
 }

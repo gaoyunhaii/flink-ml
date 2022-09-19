@@ -21,14 +21,11 @@ package org.apache.flink.iteration;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.typeutils.GenericTypeInfo;
 import org.apache.flink.iteration.compile.DraftExecutionEnvironment;
-import org.apache.flink.iteration.operator.HeadOperatorFactory;
 import org.apache.flink.iteration.operator.OperatorWrapper;
 import org.apache.flink.iteration.operator.allround.AllRoundOperatorWrapper;
-import org.apache.flink.iteration.typeinfo.IterationRecordTypeInfo;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.CoProcessFunction;
-import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.util.Collector;
 
 import java.util.ArrayList;
@@ -167,12 +164,9 @@ public abstract class IterationTopologyBuilder {
             int totalInitVariableParallelism) {
         // Deals with the criteria streams
         DataStream<?> terminationCriteria = draftEnv.getActualStream(draftCriteriaStream.getId());
-        // It should always has the IterationRecordTypeInfo
-        checkState(
-                terminationCriteria.getType().getClass().equals(IterationRecordTypeInfo.class),
-                "The termination criteria should always return IterationRecord.");
-        TypeInformation<?> innerType =
-                ((IterationRecordTypeInfo<?>) terminationCriteria.getType()).getInnerTypeInfo();
+
+        // Acquire the original type info
+        TypeInformation<?> innerType = unwrapTypeInfo(terminationCriteria.getType());
 
         DataStream<?> emptyCriteriaSource =
                 env.addSource(new DraftExecutionEnvironment.EmptySource())
@@ -220,7 +214,7 @@ public abstract class IterationTopologyBuilder {
             DataStream<?> criteriaStream,
             TypeInformation<?> criteriaStreamType) {
         DraftExecutionEnvironment criteriaDraftEnv =
-                new DraftExecutionEnvironment(env, new AllRoundOperatorWrapper<>());
+                createDraftExecutionEnvironment(env, new AllRoundOperatorWrapper());
         DataStream draftHeadStream = criteriaDraftEnv.addDraftSource(head, criteriaStreamType);
         DataStream draftTerminationCriteria =
                 criteriaDraftEnv.addDraftSource(criteriaStream, criteriaStreamType);
@@ -281,6 +275,11 @@ public abstract class IterationTopologyBuilder {
             StreamExecutionEnvironment env,
             OperatorWrapper<?, IterationRecord<?>> initialOperatorWrapper);
 
+    protected abstract TypeInformation<?> unwrapTypeInfo(TypeInformation<?> wrappedTypeInfo);
+
+    protected abstract void setCriteriaParallelism(
+            DataStreamList headStreams, int criteriaParallelism);
+
     private List<TypeInformation<?>> getTypeInfos(DataStreamList dataStreams) {
         return map(dataStreams, DataStream::getType);
     }
@@ -303,18 +302,6 @@ public abstract class IterationTopologyBuilder {
                 dataStreams,
                 dataStream -> {
                     draftEnv.addOperatorIfNotExists(dataStream.getTransformation());
-                    return null;
-                });
-    }
-
-    private void setCriteriaParallelism(DataStreamList headStreams, int criteriaParallelism) {
-        map(
-                headStreams,
-                dataStream -> {
-                    ((HeadOperatorFactory)
-                                    ((OneInputTransformation) dataStream.getTransformation())
-                                            .getOperatorFactory())
-                            .setCriteriaStreamParallelism(criteriaParallelism);
                     return null;
                 });
     }

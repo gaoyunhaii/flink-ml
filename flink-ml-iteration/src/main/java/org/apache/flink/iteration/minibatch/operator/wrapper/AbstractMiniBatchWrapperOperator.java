@@ -50,7 +50,7 @@ import java.util.Objects;
 /** Base class for mini-batch wrapper */
 public abstract class AbstractMiniBatchWrapperOperator<
                 T, S extends StreamOperator<IterationRecord<T>>>
-        implements StreamOperator<MiniBatchRecord<T>>, BoundedOneInput, BoundedMultiInput {
+        implements StreamOperator<MiniBatchRecord<T>> {
 
     private static final Logger LOG =
             LoggerFactory.getLogger(AbstractMiniBatchWrapperOperator.class);
@@ -144,20 +144,6 @@ public abstract class AbstractMiniBatchWrapperOperator<
             throws Exception {
         return wrappedOperator.snapshotState(
                 checkpointId, timestamp, checkpointOptions, storageLocation);
-    }
-
-    @Override
-    public void endInput() throws Exception {
-        OperatorUtils.processOperatorOrUdfIfSatisfy(
-                wrappedOperator, BoundedOneInput.class, (boundedInput) -> boundedInput.endInput());
-    }
-
-    @Override
-    public void endInput(int index) throws Exception {
-        OperatorUtils.processOperatorOrUdfIfSatisfy(
-                wrappedOperator,
-                BoundedMultiInput.class,
-                (boundedInput) -> boundedInput.endInput(index));
     }
 
     @Override

@@ -51,7 +51,7 @@ public class IterationConfig {
 
         private OperatorLifeCycle operatorLifeCycle = OperatorLifeCycle.ALL_ROUND;
 
-        private int miniBatchRecords = 1;
+        private int miniBatchRecords = 10;
 
         private IterationConfigBuilder() {}
 

@@ -20,6 +20,8 @@ package org.apache.flink.iteration.minibatch.operator.wrapper;
 
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
+import org.apache.flink.iteration.operator.OperatorUtils;
+import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
@@ -31,7 +33,8 @@ import org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus;
 public class OneInputMiniBatchWrapperOperator<IN, OUT>
         extends AbstractMiniBatchWrapperOperator<
                 OUT, OneInputStreamOperator<IterationRecord<IN>, IterationRecord<OUT>>>
-        implements OneInputStreamOperator<MiniBatchRecord<IN>, MiniBatchRecord<OUT>> {
+        implements OneInputStreamOperator<MiniBatchRecord<IN>, MiniBatchRecord<OUT>>,
+                BoundedOneInput {
 
     private final StreamRecord<IterationRecord<IN>> reused;
 
@@ -66,5 +69,11 @@ public class OneInputMiniBatchWrapperOperator<IN, OUT>
     @Override
     public void processLatencyMarker(LatencyMarker latencyMarker) throws Exception {
         wrappedOperator.processLatencyMarker(latencyMarker);
+    }
+
+    @Override
+    public void endInput() throws Exception {
+        OperatorUtils.processOperatorOrUdfIfSatisfy(
+                wrappedOperator, BoundedOneInput.class, (boundedInput) -> boundedInput.endInput());
     }
 }

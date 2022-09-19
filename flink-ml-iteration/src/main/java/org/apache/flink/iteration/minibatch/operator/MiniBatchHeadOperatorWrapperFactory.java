@@ -51,6 +51,10 @@ public class MiniBatchHeadOperatorWrapperFactory
         return headOperatorFactory.getCoordinatorProvider(s, operatorID);
     }
 
+    public void setCriteriaStreamParallelism(int criteriaStreamParallelism) {
+        headOperatorFactory.setCriteriaStreamParallelism(criteriaStreamParallelism);
+    }
+
     @Override
     public <T extends StreamOperator<MiniBatchRecord<?>>> T createStreamOperator(
             StreamOperatorParameters<MiniBatchRecord<?>> streamOperatorParameters) {

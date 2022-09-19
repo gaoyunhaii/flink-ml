@@ -51,6 +51,7 @@ public class MultiMiniBatchCache implements MiniBatchCache {
         }
 
         serializationDelegate = new SerializationDelegate<>(null);
+        serializationDelegate.setInstance(new StreamRecord<>(null, 0));
     }
 
     @Override

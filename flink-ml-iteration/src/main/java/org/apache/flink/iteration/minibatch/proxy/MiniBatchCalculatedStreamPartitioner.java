@@ -60,6 +60,7 @@ public class MiniBatchCalculatedStreamPartitioner<T> extends StreamPartitioner<M
     @Override
     public void setup(int numberOfChannels) {
         super.setup(numberOfChannels);
+        wrappedStreamPartitioner.setup(numberOfChannels);
         this.numberOfChannels = numberOfChannels;
     }
 

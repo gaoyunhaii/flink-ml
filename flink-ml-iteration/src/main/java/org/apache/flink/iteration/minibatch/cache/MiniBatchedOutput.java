@@ -27,6 +27,7 @@ import org.apache.flink.iteration.minibatch.proxy.MiniBatchCalculatedStreamParti
 import org.apache.flink.iteration.minibatch.proxy.MiniBatchProxyStreamPartitioner;
 import org.apache.flink.iteration.utils.ReflectionUtils;
 import org.apache.flink.metrics.Counter;
+import org.apache.flink.runtime.io.network.api.writer.BroadcastRecordWriter;
 import org.apache.flink.runtime.io.network.api.writer.ChannelSelectorRecordWriter;
 import org.apache.flink.runtime.io.network.api.writer.RecordWriter;
 import org.apache.flink.streaming.api.operators.Output;
@@ -43,6 +44,7 @@ import org.apache.flink.util.OutputTag;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -132,6 +134,11 @@ public class MiniBatchedOutput<T>
             Output<?> output, OutputReflectionContext reflectionContext) {
         RecordWriter recordWriter =
                 ReflectionUtils.getFieldValue(output, RecordWriterOutput.class, "recordWriter");
+        if (recordWriter instanceof BroadcastRecordWriter) {
+            return new OutputContext(
+                    reflectionContext.getRecordWriterOutputTag(output), null, 1, output, false);
+        }
+
         StreamPartitioner channelSelector =
                 ReflectionUtils.getFieldValue(
                         recordWriter, ChannelSelectorRecordWriter.class, "channelSelector");
@@ -151,7 +158,7 @@ public class MiniBatchedOutput<T>
                             .getWrappedStreamPartitioner(),
                     ((MiniBatchCalculatedStreamPartitioner) channelSelector).getNumberOfChannels(),
                     output,
-                    false);
+                    true);
         } else if (channelSelector instanceof ForwardPartitioner
                 || channelSelector instanceof RescalePartitioner
                 || channelSelector instanceof RebalancePartitioner) {
