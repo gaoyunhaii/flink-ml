@@ -20,7 +20,7 @@ package org.apache.flink.iteration.minibatch.operator.wrapper;
 
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
-import org.apache.flink.iteration.minibatch.cache.MiniBatchedOutput;
+import org.apache.flink.iteration.minibatch.cache.MiniBatchOutputFactory;
 import org.apache.flink.iteration.operator.OperatorUtils;
 import org.apache.flink.metrics.groups.OperatorMetricGroup;
 import org.apache.flink.runtime.checkpoint.CheckpointOptions;
@@ -30,8 +30,6 @@ import org.apache.flink.runtime.metrics.groups.InternalOperatorMetricGroup;
 import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.apache.flink.runtime.state.CheckpointStreamFactory;
 import org.apache.flink.streaming.api.graph.StreamConfig;
-import org.apache.flink.streaming.api.operators.BoundedMultiInput;
-import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OperatorSnapshotFutures;
 import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.api.operators.StreamOperator;
@@ -65,7 +63,7 @@ public abstract class AbstractMiniBatchWrapperOperator<
 
     protected final Output<StreamRecord<MiniBatchRecord<T>>> providedOutput;
 
-    protected final MiniBatchedOutput<T> miniBatchedOutput;
+    protected final Output<StreamRecord<IterationRecord<T>>> miniBatchedOutput;
 
     protected final S wrappedOperator;
 
@@ -85,8 +83,8 @@ public abstract class AbstractMiniBatchWrapperOperator<
         this.metrics = createOperatorMetricGroup(containingTask.getEnvironment(), streamConfig);
 
         this.miniBatchedOutput =
-                new MiniBatchedOutput<>(
-                        providedOutput,
+                MiniBatchOutputFactory.createIterationRecordOutput(
+                        (Output) providedOutput,
                         miniBatchRecords,
                         metrics.getIOMetricGroup().getNumRecordsOutCounter(),
                         streamConfig);

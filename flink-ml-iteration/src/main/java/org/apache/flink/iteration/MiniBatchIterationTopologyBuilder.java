@@ -53,6 +53,7 @@ public class MiniBatchIterationTopologyBuilder extends IterationTopologyBuilder 
 
     public MiniBatchIterationTopologyBuilder(int miniBatchRecords) {
         this.miniBatchRecords = miniBatchRecords;
+        System.out.println("mini batch record size is " + miniBatchRecords);
     }
 
     @Override
@@ -63,7 +64,8 @@ public class MiniBatchIterationTopologyBuilder extends IterationTopologyBuilder 
                         dataStream ->
                                 dataStream
                                         .transform(
-                                                "input-" + dataStream.getTransformation().getName(),
+                                                "m-input-"
+                                                        + dataStream.getTransformation().getName(),
                                                 new MiniBatchRecordTypeInfo<>(
                                                         new IterationRecordTypeInfo<>(
                                                                 dataStream.getType(), true)),
@@ -86,7 +88,7 @@ public class MiniBatchIterationTopologyBuilder extends IterationTopologyBuilder 
                         (index, dataStream) ->
                                 ((SingleOutputStreamOperator<MiniBatchRecord<?>>) dataStream)
                                         .transform(
-                                                "head-"
+                                                "m-head-"
                                                         + variableStreams
                                                                 .get(index)
                                                                 .getTransformation()
@@ -112,12 +114,15 @@ public class MiniBatchIterationTopologyBuilder extends IterationTopologyBuilder 
                         (index, dataStream) ->
                                 ((DataStream<MiniBatchRecord<?>>) dataStream)
                                         .transform(
-                                                "tail-" + dataStream.getTransformation().getName(),
+                                                "m-tail-"
+                                                        + dataStream.getTransformation().getName(),
                                                 new MiniBatchRecordTypeInfo<>(
                                                         new IterationRecordTypeInfo(
                                                                 dataStream.getType(), true)),
                                                 new MiniBatchTailOperator(
-                                                        iterationId, startIndex + index))
+                                                        iterationId,
+                                                        startIndex + index,
+                                                        miniBatchRecords))
                                         .setParallelism(dataStream.getParallelism())));
     }
 
@@ -153,7 +158,7 @@ public class MiniBatchIterationTopologyBuilder extends IterationTopologyBuilder 
                                                                                     .getTypeInfo())))
                                             .broadcast())
                             .transform(
-                                    "Replayer-"
+                                    "m-Replayer-"
                                             + originalDataStreams
                                                     .get(i)
                                                     .getTransformation()
@@ -182,14 +187,14 @@ public class MiniBatchIterationTopologyBuilder extends IterationTopologyBuilder 
                                             tailsUnion
                                                     .map(x -> x)
                                                     .name(
-                                                            "tail-map-"
+                                                            "m-tail-map-"
                                                                     + dataStream
                                                                             .getTransformation()
                                                                             .getName())
                                                     .returns(inputType)
                                                     .setParallelism(1))
                                     .transform(
-                                            "output-" + dataStream.getTransformation().getName(),
+                                            "m-output-" + dataStream.getTransformation().getName(),
                                             inputType
                                                     .getIterationRecordTypeInfo()
                                                     .getInnerTypeInfo(),

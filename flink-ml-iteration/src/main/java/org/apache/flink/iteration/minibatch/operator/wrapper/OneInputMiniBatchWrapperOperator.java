@@ -20,8 +20,10 @@ package org.apache.flink.iteration.minibatch.operator.wrapper;
 
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
+import org.apache.flink.iteration.minibatch.operator.WrapperOperator;
 import org.apache.flink.iteration.operator.OperatorUtils;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
+import org.apache.flink.streaming.api.operators.Input;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
@@ -34,7 +36,8 @@ public class OneInputMiniBatchWrapperOperator<IN, OUT>
         extends AbstractMiniBatchWrapperOperator<
                 OUT, OneInputStreamOperator<IterationRecord<IN>, IterationRecord<OUT>>>
         implements OneInputStreamOperator<MiniBatchRecord<IN>, MiniBatchRecord<OUT>>,
-                BoundedOneInput {
+                BoundedOneInput,
+                WrapperOperator<IN> {
 
     private final StreamRecord<IterationRecord<IN>> reused;
 
@@ -54,6 +57,11 @@ public class OneInputMiniBatchWrapperOperator<IN, OUT>
             wrappedOperator.setKeyContextElement(reused);
             wrappedOperator.processElement(reused);
         }
+    }
+
+    @Override
+    public Input<IterationRecord<IN>> getWrappedOperator() {
+        return wrappedOperator;
     }
 
     @Override

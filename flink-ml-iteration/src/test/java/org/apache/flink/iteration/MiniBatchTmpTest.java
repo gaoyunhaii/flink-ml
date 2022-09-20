@@ -62,13 +62,13 @@ public class MiniBatchTmpTest {
                         IterationConfig.newBuilder().setMiniBatchRecords(10).build(),
                         ((variableStreams, dataStreams) -> {
                             DataStream<Integer> input = variableStreams.get(0);
-                            SingleOutputStreamOperator<Integer> processed =
-                                    input.process(new MyMapFunction());
-
                             //                            SingleOutputStreamOperator<Integer>
                             // processed =
-                            //                                    input.keyBy(i -> i %
-                            // 2).process(new MyMapFunction2());
+                            //                                    input.process(new
+                            // MyMapFunction());
+
+                            SingleOutputStreamOperator<Integer> processed =
+                                    input.keyBy(i -> i % 2).process(new MyMapFunction2());
 
                             return new IterationBodyResult(
                                     DataStreamList.of(processed),
@@ -101,6 +101,7 @@ public class MiniBatchTmpTest {
                 ProcessFunction<Integer, Integer>.Context context,
                 Collector<Integer> collector)
                 throws Exception {
+            System.out.println(" add " + integer);
             integers.add(integer);
         }
 
@@ -108,6 +109,7 @@ public class MiniBatchTmpTest {
         public void onEpochWatermarkIncremented(
                 int epochWatermark, IterationListener.Context context, Collector<Integer> collector)
                 throws Exception {
+            System.out.println("On epoch terminated");
             if (epochWatermark < 10) {
                 integers.forEach(collector::collect);
                 integers.clear();

@@ -21,9 +21,8 @@ package org.apache.flink.iteration.minibatch.cache;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
-import org.apache.flink.iteration.minibatch.ReusedMiniBatchRecordSerializer;
-import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 
 import java.util.ArrayList;
@@ -33,9 +32,7 @@ import static org.apache.flink.util.Preconditions.checkState;
 
 public class SingleMiniBatchCache implements MiniBatchCache {
 
-    private final Output<StreamRecord<MiniBatchRecord<?>>> innerOutput;
-
-    private final OutputTag<?> tag;
+    private final Collector<StreamRecord<MiniBatchRecord<?>>> innerOutput;
 
     private final int miniBatchRecords;
 
@@ -45,16 +42,13 @@ public class SingleMiniBatchCache implements MiniBatchCache {
 
     private int nextIterationRecordToUse;
 
-    private final TypeSerializer serializer;
-
     public SingleMiniBatchCache(
-            Output<StreamRecord<MiniBatchRecord<?>>> innerOutput,
+            Collector<StreamRecord<MiniBatchRecord<?>>> innerOutput,
             OutputTag<?> tag,
             int miniBatchRecords,
             int targetPartition,
             TypeSerializer<?> typeSerializer) {
         this.innerOutput = innerOutput;
-        this.tag = tag;
         this.miniBatchRecords = miniBatchRecords;
 
         reused = new StreamRecord<>(new MiniBatchRecord<>());
@@ -65,11 +59,6 @@ public class SingleMiniBatchCache implements MiniBatchCache {
             reusedIterationRecords.add(IterationRecord.newRecord(null, 0));
         }
         nextIterationRecordToUse = 0;
-
-        checkState(typeSerializer instanceof ReusedMiniBatchRecordSerializer);
-        this.serializer =
-                (((ReusedMiniBatchRecordSerializer) typeSerializer).getIterationRecordSerializer())
-                        .getInnerSerializer();
     }
 
     @Override
@@ -87,11 +76,7 @@ public class SingleMiniBatchCache implements MiniBatchCache {
 
         reused.getValue().addRecord(reusedIterationRecord, timestamp);
         if (reused.getValue().getSize() >= miniBatchRecords) {
-            if (this.tag == null) {
-                innerOutput.collect(reused);
-            } else {
-                innerOutput.collect((OutputTag) tag, reused);
-            }
+            innerOutput.collect(reused);
             reused.getValue().clear();
             nextIterationRecordToUse = 0;
         }
@@ -100,11 +85,7 @@ public class SingleMiniBatchCache implements MiniBatchCache {
     @Override
     public void flush() {
         if (reused.getValue().getSize() > 0) {
-            if (this.tag == null) {
-                innerOutput.collect(reused);
-            } else {
-                innerOutput.collect((OutputTag) tag, reused);
-            }
+            innerOutput.collect(reused);
             reused.getValue().clear();
             nextIterationRecordToUse = 0;
         }

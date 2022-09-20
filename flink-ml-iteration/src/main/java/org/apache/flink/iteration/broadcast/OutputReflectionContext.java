@@ -35,8 +35,12 @@ public class OutputReflectionContext {
     private final Class<?> broadcastingOutputClass;
     private final Field broadcastingOutputsField;
 
+    private final Class<?> copyingBroadcastingOutputClass;
+
     private final Class<?> chainingOutputClass;
     private final Field chainingOutputTagField;
+
+    private final Class<?> copyingChainingOutputClass;
 
     private final Field recordWriterOutputTagField;
     private final Field recordWriterField;
@@ -51,10 +55,17 @@ public class OutputReflectionContext {
             this.broadcastingOutputsField =
                     ReflectionUtils.getClassField(broadcastingOutputClass, "outputs");
 
+            this.copyingBroadcastingOutputClass =
+                    Class.forName(
+                            "org.apache.flink.streaming.runtime.tasks.CopyingBroadcastingOutputCollector");
+
             this.chainingOutputClass =
                     Class.forName("org.apache.flink.streaming.runtime.tasks.ChainingOutput");
             this.chainingOutputTagField =
                     ReflectionUtils.getClassField(chainingOutputClass, "outputTag");
+
+            this.copyingChainingOutputClass =
+                    Class.forName("org.apache.flink.streaming.runtime.tasks.CopyingChainingOutput");
 
             this.recordWriterOutputTagField =
                     ReflectionUtils.getClassField(RecordWriterOutput.class, "outputTag");
@@ -74,8 +85,32 @@ public class OutputReflectionContext {
         return broadcastingOutputClass.isAssignableFrom(rawOutput.getClass());
     }
 
+    public boolean isCopyingBroadcastingOutput(Output<?> rawOutput) {
+        return copyingBroadcastingOutputClass.isAssignableFrom(rawOutput.getClass());
+    }
+
+    public Class<?> getBroadcastingOutputClass() {
+        return broadcastingOutputClass;
+    }
+
+    public Class<?> getCopyingBroadcastingOutputClass() {
+        return copyingBroadcastingOutputClass;
+    }
+
     public boolean isChainingOutput(Output<?> rawOutput) {
         return chainingOutputClass.isAssignableFrom(rawOutput.getClass());
+    }
+
+    public boolean isCopyingChainingOutput(Output<?> rawOutput) {
+        return copyingChainingOutputClass.isAssignableFrom(rawOutput.getClass());
+    }
+
+    public Class<?> getChainingOutputClass() {
+        return chainingOutputClass;
+    }
+
+    public Class<?> getCopyingChainingOutputClass() {
+        return copyingChainingOutputClass;
     }
 
     public boolean isRecordWriterOutput(Output<?> rawOutput) {

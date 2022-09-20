@@ -22,9 +22,9 @@ import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
 import org.apache.flink.runtime.plugable.SerializationDelegate;
-import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.runtime.partitioner.StreamPartitioner;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 
 import java.util.ArrayList;
@@ -39,7 +39,7 @@ public class MultiMiniBatchCache implements MiniBatchCache {
     private final SerializationDelegate<StreamRecord<?>> serializationDelegate;
 
     public MultiMiniBatchCache(
-            Output<StreamRecord<MiniBatchRecord<?>>> innerOutput,
+            Collector<StreamRecord<MiniBatchRecord<?>>> innerOutput,
             OutputTag<?> tag,
             StreamPartitioner<?> partitioner,
             int numberOfChannels,

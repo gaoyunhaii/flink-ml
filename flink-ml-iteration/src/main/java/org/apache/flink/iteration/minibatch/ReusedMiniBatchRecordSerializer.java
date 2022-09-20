@@ -110,14 +110,14 @@ public class ReusedMiniBatchRecordSerializer<T> extends TypeSerializer<MiniBatch
     public void serialize(MiniBatchRecord<T> miniBatchRecord, DataOutputView dataOutputView)
             throws IOException {
         dataOutputView.writeInt(miniBatchRecord.getSize());
-        for (int i = 0; i < miniBatchRecord.getSize(); ++i) {
-            if (miniBatchRecord.getTimestamps().get(i) != null) {
-                dataOutputView.writeByte(0);
-                dataOutputView.writeLong(miniBatchRecord.getTimestamps().get(i));
-            } else {
-                dataOutputView.writeByte(1);
-            }
-        }
+        //        for (int i = 0; i < miniBatchRecord.getSize(); ++i) {
+        //            if (miniBatchRecord.getTimestamps().get(i) != null) {
+        //                dataOutputView.writeByte(0);
+        //                dataOutputView.writeLong(miniBatchRecord.getTimestamps().get(i));
+        //            } else {
+        //                dataOutputView.writeByte(1);
+        //            }
+        //        }
 
         for (int i = 0; i < miniBatchRecord.getSize(); ++i) {
             iterationRecordSerializer.serialize(
@@ -136,14 +136,14 @@ public class ReusedMiniBatchRecordSerializer<T> extends TypeSerializer<MiniBatch
         int size = dataInputView.readInt();
         ensureLength(tmpReused, size);
 
-        for (int i = 0; i < size; ++i) {
-            byte hasTimestampTag = dataInputView.readByte();
-            if (hasTimestampTag == 0) {
-                tmpReused.getTimestamps().set(i, dataInputView.readLong());
-            } else {
-                tmpReused.getTimestamps().set(i, null);
-            }
-        }
+        //        for (int i = 0; i < size; ++i) {
+        //            byte hasTimestampTag = dataInputView.readByte();
+        //            if (hasTimestampTag == 0) {
+        //                tmpReused.getTimestamps().set(i, dataInputView.readLong());
+        //            } else {
+        //                tmpReused.getTimestamps().set(i, null);
+        //            }
+        //        }
 
         for (int i = 0; i < size; ++i) {
             iterationRecordSerializer.deserialize(tmpReused.getRecords().get(i), dataInputView);

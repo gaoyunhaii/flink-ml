@@ -30,6 +30,7 @@ import org.apache.flink.metrics.Counter;
 import org.apache.flink.runtime.io.network.api.writer.BroadcastRecordWriter;
 import org.apache.flink.runtime.io.network.api.writer.ChannelSelectorRecordWriter;
 import org.apache.flink.runtime.io.network.api.writer.RecordWriter;
+import org.apache.flink.runtime.plugable.SerializationDelegate;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.api.watermark.Watermark;
@@ -39,108 +40,76 @@ import org.apache.flink.streaming.runtime.partitioner.RebalancePartitioner;
 import org.apache.flink.streaming.runtime.partitioner.RescalePartitioner;
 import org.apache.flink.streaming.runtime.partitioner.StreamPartitioner;
 import org.apache.flink.streaming.runtime.streamrecord.LatencyMarker;
+import org.apache.flink.streaming.runtime.streamrecord.StreamElement;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus;
+import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.io.UncheckedIOException;
 
 import static org.apache.flink.util.Preconditions.checkState;
 
 /** Cache a mini-batch of records. */
-public class MiniBatchedOutput<T>
+public class MiniBatchedRecordWriterOutput<T>
         implements Output<StreamRecord<IterationRecord<T>>>, BroadcastOutput<IterationRecord<T>> {
 
     private final Output<StreamRecord<MiniBatchRecord<T>>> output;
 
-    private final List<MiniBatchCache> nonTaggedMiniBatchCaches;
-
-    private final Map<String, MiniBatchCache> taggedMiniBatchCaches;
-
     private final BroadcastOutput<MiniBatchRecord<T>> broadcastOutput;
 
-    public MiniBatchedOutput(
+    private final OutputTag<?> outputTag;
+
+    private final MiniBatchCache miniBatchCache;
+
+    public MiniBatchedRecordWriterOutput(
+            OutputReflectionContext reflectionContext,
             Output<StreamRecord<MiniBatchRecord<T>>> output,
             int miniBatchRecords,
-            Counter outputCounter,
+            Counter numRecordsOut,
             StreamConfig streamConfig) {
         this.output = output;
+        this.broadcastOutput = BroadcastOutputFactory.createBroadcastOutput(output, numRecordsOut);
 
-        OutputReflectionContext reflectionContext = new OutputReflectionContext();
+        this.outputTag = reflectionContext.getRecordWriterOutputTag(output);
 
-        List<OutputContext> contexts = new ArrayList<>();
-        if (reflectionContext.isChainingOutput(output)) {
-            contexts.add(buildChainedOutputContext(output, reflectionContext));
-        } else if (reflectionContext.isRecordWriterOutput(output)) {
-            contexts.add(buildRecordWriterOutputContext(output, reflectionContext));
-        } else if (reflectionContext.isBroadcastingOutput(output)) {
-            Output[] innerOutputs = reflectionContext.getBroadcastingInternalOutputs(output);
-            for (int i = 0; i < innerOutputs.length; ++i) {
-                if (reflectionContext.isChainingOutput(innerOutputs[i])) {
-                    contexts.add(buildChainedOutputContext(innerOutputs[i], reflectionContext));
-                } else if (reflectionContext.isRecordWriterOutput(innerOutputs[i])) {
-                    contexts.add(
-                            buildRecordWriterOutputContext(innerOutputs[i], reflectionContext));
-                } else {
-                    throw new RuntimeException(
-                            "Unknown output type: " + innerOutputs[i].getClass());
-                }
-            }
+        OutputContext outputContext = buildRecordWriterOutputContext(output, reflectionContext);
+        // Let's build the mini-batch from the outputContext
+
+        // Let's now have a dedicated collector to skip other things
+
+        SimplifiedCollector collector =
+                new SimplifiedCollector(
+                        ReflectionUtils.getFieldValue(
+                                output, RecordWriterOutput.class, "serializationDelegate"),
+                        ReflectionUtils.getFieldValue(
+                                output, RecordWriterOutput.class, "recordWriter"));
+
+        if (!outputContext.isCalculated) {
+            this.miniBatchCache =
+                    new SingleMiniBatchCache(
+                            collector,
+                            outputContext.outputTag,
+                            miniBatchRecords,
+                            -1,
+                            outputContext.outputTag == null
+                                    ? streamConfig.getTypeSerializerOut(getClass().getClassLoader())
+                                    : streamConfig.getTypeSerializerSideOut(
+                                            outputContext.outputTag, getClass().getClassLoader()));
         } else {
-            throw new RuntimeException("Unknown output type: " + output.getClass());
+            this.miniBatchCache =
+                    new MultiMiniBatchCache(
+                            collector,
+                            outputContext.outputTag,
+                            outputContext.partitioner,
+                            outputContext.numberOfChannels,
+                            miniBatchRecords,
+                            outputContext.outputTag == null
+                                    ? streamConfig.getTypeSerializerOut(getClass().getClassLoader())
+                                    : streamConfig.getTypeSerializerSideOut(
+                                            outputContext.outputTag, getClass().getClassLoader()));
         }
-
-        nonTaggedMiniBatchCaches = new ArrayList<>();
-        taggedMiniBatchCaches = new HashMap<>();
-        for (int i = 0; i < contexts.size(); ++i) {
-            MiniBatchCache cache;
-            if (!contexts.get(i).isCalculated) {
-                cache =
-                        new SingleMiniBatchCache(
-                                contexts.get(i).output,
-                                contexts.get(i).outputTag,
-                                miniBatchRecords,
-                                -1,
-                                contexts.get(i).outputTag == null
-                                        ? streamConfig.getTypeSerializerOut(
-                                                getClass().getClassLoader())
-                                        : streamConfig.getTypeSerializerSideOut(
-                                                contexts.get(i).outputTag,
-                                                getClass().getClassLoader()));
-            } else {
-                cache =
-                        new MultiMiniBatchCache(
-                                contexts.get(i).output,
-                                contexts.get(i).outputTag,
-                                contexts.get(i).partitioner,
-                                contexts.get(i).numberOfChannels,
-                                miniBatchRecords,
-                                contexts.get(i).outputTag == null
-                                        ? streamConfig.getTypeSerializerOut(
-                                                getClass().getClassLoader())
-                                        : streamConfig.getTypeSerializerSideOut(
-                                                contexts.get(i).outputTag,
-                                                getClass().getClassLoader()));
-            }
-
-            if (contexts.get(i).outputTag == null) {
-                nonTaggedMiniBatchCaches.add(cache);
-            } else {
-                taggedMiniBatchCaches.put(contexts.get(i).outputTag.getId(), cache);
-            }
-        }
-
-        this.broadcastOutput = BroadcastOutputFactory.createBroadcastOutput(output, outputCounter);
-    }
-
-    private OutputContext buildChainedOutputContext(
-            Output<?> output, OutputReflectionContext reflectionContext) {
-        return new OutputContext(
-                reflectionContext.getChainingOutputTag(output), null, 1, output, false);
     }
 
     private OutputContext buildRecordWriterOutputContext(
@@ -204,30 +173,30 @@ public class MiniBatchedOutput<T>
 
     @Override
     public void collect(StreamRecord<IterationRecord<T>> record) {
-        if (record.getValue().getType() == IterationRecord.Type.RECORD) {
-            for (MiniBatchCache cache : nonTaggedMiniBatchCaches) {
-                cache.collect(
+        if (outputTag == null) {
+            if (record.getValue().getType() == IterationRecord.Type.RECORD) {
+                miniBatchCache.collect(
                         record.getValue(), record.hasTimestamp() ? record.getTimestamp() : null);
-            }
-        } else {
-            for (MiniBatchCache cache : nonTaggedMiniBatchCaches) {
-                cache.flush();
-                cache.collect(record.getValue(), null);
-                cache.flush();
+            } else {
+                miniBatchCache.flush();
+                miniBatchCache.collect(record.getValue(), null);
+                miniBatchCache.flush();
             }
         }
     }
 
     @Override
     public <X> void collect(OutputTag<X> outputTag, StreamRecord<X> record) {
-        MiniBatchCache cache = taggedMiniBatchCaches.get(outputTag.getId());
-        IterationRecord iterationRecord = (IterationRecord) record.getValue();
-        if (iterationRecord.getType() == IterationRecord.Type.RECORD) {
-            cache.collect(iterationRecord, record.hasTimestamp() ? record.getTimestamp() : null);
-        } else {
-            cache.flush();
-            cache.collect(iterationRecord, null);
-            cache.flush();
+        IterationRecord<?> iterationRecord = (IterationRecord<?>) record.getValue();
+        if (OutputTag.isResponsibleFor(this.outputTag, outputTag)) {
+            if (iterationRecord.getType() == IterationRecord.Type.RECORD) {
+                miniBatchCache.collect(
+                        iterationRecord, record.hasTimestamp() ? record.getTimestamp() : null);
+            } else {
+                miniBatchCache.flush();
+                miniBatchCache.collect(iterationRecord, null);
+                miniBatchCache.flush();
+            }
         }
     }
 
@@ -238,20 +207,11 @@ public class MiniBatchedOutput<T>
 
     @Override
     public void broadcastEmit(StreamRecord<IterationRecord<T>> record) throws IOException {
-        IterationRecord iterationRecord = record.getValue();
+        miniBatchCache.flush();
 
-        // flush all
-        for (MiniBatchCache cache : nonTaggedMiniBatchCaches) {
-            cache.flush();
-        }
-
-        for (Map.Entry<String, MiniBatchCache> entry : taggedMiniBatchCaches.entrySet()) {
-            entry.getValue().flush();
-        }
-
-        // Directly output them
+        // Let's directly emit the record.
         MiniBatchRecord<T> tmp = new MiniBatchRecord<>();
-        tmp.addRecord(iterationRecord, record.hasTimestamp() ? record.getTimestamp() : null);
+        tmp.addRecord(record.getValue(), record.hasTimestamp() ? record.getTimestamp() : null);
         broadcastOutput.broadcastEmit(new StreamRecord<>(tmp));
     }
 
@@ -275,5 +235,34 @@ public class MiniBatchedOutput<T>
             this.output = output;
             this.isCalculated = isCalculated;
         }
+    }
+
+    private static class SimplifiedCollector
+            implements Collector<StreamRecord<MiniBatchRecord<?>>> {
+
+        private final SerializationDelegate<StreamElement> serializationDelegate;
+
+        private final RecordWriter recordWriter;
+
+        public SimplifiedCollector(
+                SerializationDelegate<StreamElement> serializationDelegate,
+                RecordWriter recordWriter) {
+            this.serializationDelegate = serializationDelegate;
+            this.recordWriter = recordWriter;
+        }
+
+        @Override
+        public void collect(StreamRecord<MiniBatchRecord<?>> miniBatchRecordStreamRecord) {
+            serializationDelegate.setInstance(miniBatchRecordStreamRecord);
+
+            try {
+                recordWriter.emit(serializationDelegate);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e.getMessage(), e);
+            }
+        }
+
+        @Override
+        public void close() {}
     }
 }

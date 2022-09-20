@@ -18,6 +18,7 @@
 
 package org.apache.flink.iteration.utils;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Collections;
@@ -78,6 +79,18 @@ public class ReflectionUtils {
         } catch (Exception e) {
             throw new RuntimeException(
                     "Failed to get method" + methodName + " from " + targetObject, e);
+        }
+    }
+
+    public static <T> T createInstance(
+            Class<T> clazz, List<Class<?>> parameterClass, Object[] params) {
+        try {
+            Constructor<T> constructor =
+                    clazz.getDeclaredConstructor(parameterClass.toArray(new Class[0]));
+            constructor.setAccessible(true);
+            return constructor.newInstance(params);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to get create instance of " + clazz, e);
         }
     }
 }

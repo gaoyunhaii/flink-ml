@@ -163,7 +163,13 @@ public class ReusedIterationRecordSerializer<T> extends TypeSerializer<Iteration
 
         switch (reuse.getType()) {
             case RECORD:
-                // reuse.setValue(innerSerializer.deserialize(reuse.getValue(), source));
+                //                if (reuse.getValue() != null) {
+                //                    reuse.setValue(innerSerializer.deserialize(reuse.getValue(),
+                // source));
+                //                } else {
+                //                    reuse.setValue(innerSerializer.deserialize(source));
+                //                }
+
                 reuse.setValue(innerSerializer.deserialize(source));
                 return reuse;
             case EPOCH_WATERMARK:

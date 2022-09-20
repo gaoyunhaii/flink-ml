@@ -24,6 +24,7 @@ import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.checkpoint.Checkpoints;
 import org.apache.flink.iteration.checkpoint.CheckpointsBroker;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
+import org.apache.flink.iteration.minibatch.cache.SingleMiniBatchCache;
 import org.apache.flink.iteration.operator.OperatorUtils;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
 import org.apache.flink.statefun.flink.core.feedback.RecordwiseFeedbackChannelProvider;
@@ -31,33 +32,38 @@ import org.apache.flink.statefun.flink.core.feedback.SubtaskFeedbackKey;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.ChainingStrategy;
+import org.apache.flink.streaming.api.operators.Input;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.Output;
+import org.apache.flink.streaming.api.watermark.Watermark;
+import org.apache.flink.streaming.runtime.streamrecord.LatencyMarker;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.StreamTask;
+import org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus;
+import org.apache.flink.util.Collector;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.IOUtils;
 
 import java.util.Objects;
-import java.util.function.Consumer;
 
 public class MiniBatchTailOperator extends AbstractStreamOperator<Void>
-        implements OneInputStreamOperator<MiniBatchRecord<?>, Void> {
+        implements OneInputStreamOperator<MiniBatchRecord<?>, Void>, WrapperOperator {
 
     private final IterationID iterationId;
 
     private final int feedbackIndex;
 
+    private final int miniBatchRecords;
+
     private transient MailboxExecutor mailboxExecutor;
 
     /** We distinguish how the record is processed according to if objectReuse is enabled. */
-    private transient Consumer<MiniBatchRecord<?>> recordConsumer;
-
     private transient FeedbackChannel<MiniBatchRecord<?>> channel;
 
-    public MiniBatchTailOperator(IterationID iterationId, int feedbackIndex) {
+    public MiniBatchTailOperator(IterationID iterationId, int feedbackIndex, int miniBatchRecords) {
         this.iterationId = Objects.requireNonNull(iterationId);
         this.feedbackIndex = feedbackIndex;
+        this.miniBatchRecords = miniBatchRecords;
         this.chainingStrategy = ChainingStrategy.ALWAYS;
     }
 
@@ -89,13 +95,11 @@ public class MiniBatchTailOperator extends AbstractStreamOperator<Void>
                                 getRuntimeContext().getAttemptNumber(),
                                 runnable ->
                                         mailboxExecutor.execute(runnable::run, "Tail feedback"));
-
-        this.recordConsumer = this::processIfObjectReuseEnabled;
     }
 
     @Override
     public void processElement(StreamRecord<MiniBatchRecord<?>> streamRecord) {
-        recordConsumer.accept(streamRecord.getValue());
+        processIfObjectReuseEnabled(streamRecord.getValue());
     }
 
     @Override
@@ -141,5 +145,70 @@ public class MiniBatchTailOperator extends AbstractStreamOperator<Void>
     public void close() throws Exception {
         IOUtils.closeQuietly(channel);
         super.close();
+    }
+
+    @Override
+    public Input<IterationRecord<?>> getWrappedOperator() {
+        return new ProxyTailOperator(miniBatchRecords);
+    }
+
+    public class ProxyTailOperator implements Input<IterationRecord<?>> {
+
+        private final SingleMiniBatchCache cache;
+
+        public ProxyTailOperator(int miniBatchRecords) {
+            this.cache =
+                    new SingleMiniBatchCache(
+                            new Collector<StreamRecord<MiniBatchRecord<?>>>() {
+                                @Override
+                                public void collect(
+                                        StreamRecord<MiniBatchRecord<?>>
+                                                miniBatchRecordStreamRecord) {
+                                    MiniBatchTailOperator.this.processIfObjectReuseEnabled(
+                                            miniBatchRecordStreamRecord.getValue());
+                                }
+
+                                @Override
+                                public void close() {}
+                            },
+                            null,
+                            miniBatchRecords,
+                            -1,
+                            config.getTypeSerializerOut(getClass().getClassLoader()));
+        }
+
+        @Override
+        public void processElement(StreamRecord<IterationRecord<?>> streamRecord) throws Exception {
+            if (streamRecord.getValue().getType() == IterationRecord.Type.RECORD) {
+                cache.collect(
+                        streamRecord.getValue(),
+                        streamRecord.hasTimestamp() ? streamRecord.getTimestamp() : null);
+            } else {
+                cache.flush();
+                cache.collect(
+                        streamRecord.getValue(),
+                        streamRecord.hasTimestamp() ? streamRecord.getTimestamp() : null);
+                cache.flush();
+            }
+        }
+
+        @Override
+        public void processWatermark(Watermark watermark) throws Exception {
+            MiniBatchTailOperator.this.processWatermark(watermark);
+        }
+
+        @Override
+        public void processWatermarkStatus(WatermarkStatus watermarkStatus) throws Exception {
+            MiniBatchTailOperator.this.processWatermarkStatus(watermarkStatus);
+        }
+
+        @Override
+        public void processLatencyMarker(LatencyMarker latencyMarker) throws Exception {
+            MiniBatchTailOperator.this.processLatencyMarker(latencyMarker);
+        }
+
+        @Override
+        public void setKeyContextElement(StreamRecord<IterationRecord<?>> streamRecord)
+                throws Exception {}
     }
 }
