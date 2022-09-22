@@ -21,6 +21,8 @@ package org.apache.flink.iteration.minibatch;
 import org.apache.flink.api.common.typeutils.CompositeTypeSerializerSnapshot;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.base.LongSerializer;
+import org.apache.flink.api.common.typeutils.base.StringSerializer;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.iteration.IterationRecord;
@@ -110,6 +112,37 @@ public class ReusedMiniBatchRecordSerializer<T> extends TypeSerializer<MiniBatch
     public void serialize(MiniBatchRecord<T> miniBatchRecord, DataOutputView dataOutputView)
             throws IOException {
         dataOutputView.writeInt(miniBatchRecord.getSize());
+        IterationRecord.Type type = miniBatchRecord.getRecords().get(0).getType();
+        dataOutputView.writeByte(type.ordinal());
+        dataOutputView.writeInt(miniBatchRecord.getRecords().get(0).getEpoch());
+
+        //        for (int i = 0; i < miniBatchRecord.getSize(); ++i) {
+        //            dataOutputView.writeInt(miniBatchRecord.getRecords().get(i).getEpoch());
+        //        }
+
+        switch (type) {
+            case RECORD:
+                for (int i = 0; i < miniBatchRecord.getSize(); ++i) {
+                    iterationRecordSerializer
+                            .getInnerSerializer()
+                            .serialize(
+                                    miniBatchRecord.getRecords().get(i).getValue(), dataOutputView);
+                }
+                break;
+            case EPOCH_WATERMARK:
+                for (int i = 0; i < miniBatchRecord.getSize(); ++i) {
+                    StringSerializer.INSTANCE.serialize(
+                            miniBatchRecord.getRecords().get(i).getSender(), dataOutputView);
+                }
+                break;
+            case BARRIER:
+                for (int i = 0; i < miniBatchRecord.getSize(); ++i) {
+                    LongSerializer.INSTANCE.serialize(
+                            miniBatchRecord.getRecords().get(i).getCheckpointId(), dataOutputView);
+                }
+                break;
+        }
+
         //        for (int i = 0; i < miniBatchRecord.getSize(); ++i) {
         //            if (miniBatchRecord.getTimestamps().get(i) != null) {
         //                dataOutputView.writeByte(0);
@@ -118,11 +151,6 @@ public class ReusedMiniBatchRecordSerializer<T> extends TypeSerializer<MiniBatch
         //                dataOutputView.writeByte(1);
         //            }
         //        }
-
-        for (int i = 0; i < miniBatchRecord.getSize(); ++i) {
-            iterationRecordSerializer.serialize(
-                    miniBatchRecord.getRecords().get(i), dataOutputView);
-        }
     }
 
     @Override
@@ -136,6 +164,43 @@ public class ReusedMiniBatchRecordSerializer<T> extends TypeSerializer<MiniBatch
         int size = dataInputView.readInt();
         ensureLength(tmpReused, size);
 
+        IterationRecord.Type type = IterationRecord.Type.values()[dataInputView.readByte()];
+        int epoch = dataInputView.readInt();
+        for (int i = 0; i < size; ++i) {
+            tmpReused.getRecords().get(i).setType(type);
+            tmpReused.getRecords().get(i).setEpoch(epoch);
+        }
+
+        switch (type) {
+            case RECORD:
+                for (int i = 0; i < size; ++i) {
+                    tmpReused
+                            .getRecords()
+                            .get(i)
+                            .setValue(
+                                    iterationRecordSerializer
+                                            .getInnerSerializer()
+                                            .deserialize(dataInputView));
+                }
+                break;
+            case EPOCH_WATERMARK:
+                for (int i = 0; i < size; ++i) {
+                    tmpReused
+                            .getRecords()
+                            .get(i)
+                            .setSender(StringSerializer.INSTANCE.deserialize(dataInputView));
+                }
+                break;
+            case BARRIER:
+                for (int i = 0; i < size; ++i) {
+                    tmpReused
+                            .getRecords()
+                            .get(i)
+                            .setCheckpointId(LongSerializer.INSTANCE.deserialize(dataInputView));
+                }
+                break;
+        }
+
         //        for (int i = 0; i < size; ++i) {
         //            byte hasTimestampTag = dataInputView.readByte();
         //            if (hasTimestampTag == 0) {
@@ -144,10 +209,6 @@ public class ReusedMiniBatchRecordSerializer<T> extends TypeSerializer<MiniBatch
         //                tmpReused.getTimestamps().set(i, null);
         //            }
         //        }
-
-        for (int i = 0; i < size; ++i) {
-            iterationRecordSerializer.deserialize(tmpReused.getRecords().get(i), dataInputView);
-        }
 
         return tmpReused;
     }

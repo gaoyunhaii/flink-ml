@@ -25,6 +25,7 @@ import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.LatencyMarker;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus;
+import org.apache.flink.types.IntValue;
 import org.apache.flink.util.OutputTag;
 
 import java.util.HashMap;
@@ -40,16 +41,17 @@ public class ProxyOutput<T> implements Output<StreamRecord<T>> {
 
     private final Map<String, SideOutputCache> sideOutputCaches = new HashMap<>();
 
-    private Integer contextRound;
+    private final IntValue threadLocalContextRound;
 
     public ProxyOutput(Output<StreamRecord<IterationRecord<T>>> output) {
         this.output = Objects.requireNonNull(output);
         this.reuseRecord = new StreamRecord<>(IterationRecord.newRecord(null, 0));
+        this.threadLocalContextRound = ProxyOutputFactory.EPOCH.get();
     }
-
-    public void setContextRound(Integer contextRound) {
-        this.contextRound = contextRound;
-    }
+    //
+    //    public void setContextRound(Integer contextRound) {
+    //        this.contextRound = contextRound;
+    //    }
 
     @Override
     public void emitWatermark(Watermark mark) {
@@ -75,7 +77,8 @@ public class ProxyOutput<T> implements Output<StreamRecord<T>> {
                                                         outputTag.getTypeInfo(), true)),
                                         new StreamRecord<>(IterationRecord.newRecord(null, 0))));
         sideOutputCache.cachedRecord.replace(
-                IterationRecord.newRecord(record.getValue(), contextRound), record.getTimestamp());
+                IterationRecord.newRecord(record.getValue(), threadLocalContextRound.getValue()),
+                record.getTimestamp());
         output.collect(sideOutputCache.tag, sideOutputCache.cachedRecord);
     }
 
@@ -87,7 +90,7 @@ public class ProxyOutput<T> implements Output<StreamRecord<T>> {
     @Override
     public void collect(StreamRecord<T> record) {
         reuseRecord.getValue().setValue(record.getValue());
-        reuseRecord.getValue().setEpoch(contextRound);
+        reuseRecord.getValue().setEpoch(threadLocalContextRound.getValue());
         reuseRecord.setTimestamp(record.getTimestamp());
         output.collect(reuseRecord);
     }

@@ -25,7 +25,6 @@ import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.common.typeutils.base.IntSerializer;
-import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.iteration.IterationID;
 import org.apache.flink.iteration.IterationListener;
@@ -34,10 +33,8 @@ import org.apache.flink.iteration.broadcast.BroadcastOutput;
 import org.apache.flink.iteration.broadcast.BroadcastOutputFactory;
 import org.apache.flink.iteration.checkpoint.Checkpoints;
 import org.apache.flink.iteration.checkpoint.CheckpointsBroker;
-import org.apache.flink.iteration.config.IterationOptions;
 import org.apache.flink.iteration.datacache.nonkeyed.DataCacheSnapshot;
-import org.apache.flink.iteration.feedback.FeedbackConfiguration;
-import org.apache.flink.iteration.feedback.SerializedFeedbackChannel;
+import org.apache.flink.iteration.minibatch.operator.adapter.OneInputMiniBatchProcessor;
 import org.apache.flink.iteration.operator.event.CoordinatorCheckpointEvent;
 import org.apache.flink.iteration.operator.event.GloballyAlignedEvent;
 import org.apache.flink.iteration.operator.event.SubtaskAlignedEvent;
@@ -67,13 +64,8 @@ import org.apache.flink.runtime.operators.coordination.OperatorEventHandler;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StatePartitionStreamProvider;
 import org.apache.flink.runtime.state.StateSnapshotContext;
-import org.apache.flink.statefun.flink.core.feedback.FeedbackChannel;
-import org.apache.flink.statefun.flink.core.feedback.FeedbackChannelBroker;
 import org.apache.flink.statefun.flink.core.feedback.FeedbackConsumer;
-import org.apache.flink.statefun.flink.core.feedback.FeedbackKey;
 import org.apache.flink.statefun.flink.core.feedback.IterationFeedbackChannelProvider;
-import org.apache.flink.statefun.flink.core.feedback.RecordBasedFeedbackChannel;
-import org.apache.flink.statefun.flink.core.feedback.SubtaskFeedbackKey;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
@@ -91,7 +83,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.Executor;
 
 import static org.apache.flink.util.Preconditions.checkState;
 
@@ -118,7 +109,8 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         implements OneInputStreamOperator<IterationRecord<?>, IterationRecord<?>>,
                 FeedbackConsumer<IterationRecord<?>>,
                 OperatorEventHandler,
-                BoundedOneInput {
+                BoundedOneInput,
+                OneInputMiniBatchProcessor<Object> {
 
     public static final OutputTag<IterationRecord<Void>> ALIGN_NOTIFY_OUTPUT_TAG =
             new OutputTag<>(
@@ -158,6 +150,8 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
 
     private Checkpoints<IterationRecord<?>> checkpoints;
 
+    private final StreamRecord reused;
+
     public HeadOperator(
             IterationID iterationId,
             int feedbackIndex,
@@ -177,6 +171,8 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
         // time service, AbstractStreamOperator requires this
         // field is non-null, otherwise we get a NullPointerException
         super.processingTimeService = processingTimeService;
+
+        reused = new StreamRecord(null, 0);
     }
 
     @Override
@@ -333,6 +329,20 @@ public class HeadOperator extends AbstractStreamOperator<IterationRecord<?>>
     @Override
     public void processElement(StreamRecord<IterationRecord<?>> element) throws Exception {
         recordProcessor.processElement(element);
+    }
+
+    @Override
+    public void processRecord(int epoch, List<IterationRecord<Object>> iterationRecords)
+            throws Exception {
+        for (IterationRecord record : iterationRecords) {
+            reused.replace(record);
+            recordProcessor.processElement(reused);
+        }
+    }
+
+    @Override
+    public void processEpochWatermark(IterationRecord<Object> epochWatermark) throws IOException {
+        throw new RuntimeException("Should not happen");
     }
 
     @Override

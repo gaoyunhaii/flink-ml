@@ -18,8 +18,12 @@
 
 package org.apache.flink.iteration.operator.allround;
 
+import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.iteration.IterationRecord;
+import org.apache.flink.iteration.minibatch.operator.adapter.OneInputMiniBatchProcessor;
+import org.apache.flink.iteration.proxy.IterationWrapperOperator;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
+import org.apache.flink.streaming.api.operators.Input;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
@@ -29,19 +33,31 @@ import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus;
 import org.apache.flink.util.FlinkRuntimeException;
 
+import java.io.IOException;
+import java.util.List;
+
 /** All-round wrapper for the one-input operator. */
 public class OneInputAllRoundWrapperOperator<IN, OUT>
         extends AbstractAllRoundWrapperOperator<OUT, OneInputStreamOperator<IN, OUT>>
         implements OneInputStreamOperator<IterationRecord<IN>, IterationRecord<OUT>>,
-                BoundedOneInput {
+                BoundedOneInput,
+                OneInputMiniBatchProcessor<IN>,
+                IterationWrapperOperator<IN> {
 
     private final StreamRecord<IN> reusedInput;
+    private transient KeySelector<?, ?> stateKeySelector;
 
     public OneInputAllRoundWrapperOperator(
             StreamOperatorParameters<IterationRecord<OUT>> parameters,
             StreamOperatorFactory<OUT> operatorFactory) {
         super(parameters, operatorFactory);
         this.reusedInput = new StreamRecord<>(null, 0);
+
+        this.stateKeySelector =
+                parameters
+                        .getStreamConfig()
+                        .getStatePartitioner(
+                                0, parameters.getContainingTask().getUserCodeClassLoader());
     }
 
     @Override
@@ -59,6 +75,35 @@ public class OneInputAllRoundWrapperOperator<IN, OUT>
             default:
                 throw new FlinkRuntimeException("Not supported iteration record type: " + element);
         }
+    }
+
+    @Override
+    public void processRecord(int epoch, List<IterationRecord<IN>> iterationRecords)
+            throws Exception {
+        setIterationContextRound(epoch);
+        if (stateKeySelector != null) {
+            for (IterationRecord<IN> record : iterationRecords) {
+                reusedInput.replace(record.getValue());
+                wrappedOperator.setKeyContextElement(reusedInput);
+                wrappedOperator.processElement(reusedInput);
+            }
+        } else {
+            for (IterationRecord<IN> record : iterationRecords) {
+                reusedInput.replace(record.getValue());
+                wrappedOperator.processElement(reusedInput);
+            }
+        }
+        clearIterationContextRound();
+    }
+
+    @Override
+    public Input<IN> getWrappedOperator() {
+        return wrappedOperator;
+    }
+
+    @Override
+    public void processEpochWatermark(IterationRecord<IN> epochWatermark) throws IOException {
+        onEpochWatermarkEvent(0, epochWatermark);
     }
 
     @Override

@@ -26,6 +26,7 @@ import org.apache.flink.iteration.progresstrack.OperatorEpochWatermarkTracker;
 import org.apache.flink.iteration.progresstrack.OperatorEpochWatermarkTrackerFactory;
 import org.apache.flink.iteration.progresstrack.OperatorEpochWatermarkTrackerListener;
 import org.apache.flink.iteration.proxy.ProxyOutput;
+import org.apache.flink.iteration.proxy.ProxyOutputFactory;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.metrics.groups.InternalOperatorMetricGroup;
 import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
@@ -38,6 +39,7 @@ import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.api.operators.TimestampedCollector;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.StreamTask;
+import org.apache.flink.types.IntValue;
 import org.apache.flink.util.OutputTag;
 
 import org.slf4j.Logger;
@@ -88,6 +90,8 @@ public abstract class AbstractWrapperOperator<T>
 
     protected final BroadcastOutput<IterationRecord<T>> eventBroadcastOutput;
 
+    protected final IntValue threadLocalContextRound;
+
     public AbstractWrapperOperator(
             StreamOperatorParameters<IterationRecord<T>> parameters,
             StreamOperatorFactory<T> operatorFactory) {
@@ -111,6 +115,8 @@ public abstract class AbstractWrapperOperator<T>
                 BroadcastOutputFactory.createBroadcastOutput(
                         output, metrics.getIOMetricGroup().getNumRecordsOutCounter());
         this.iterationContext = new IterationContext();
+
+        this.threadLocalContextRound = ProxyOutputFactory.EPOCH.get();
     }
 
     protected void onEpochWatermarkEvent(int inputIndex, IterationRecord<?> iterationRecord)
@@ -144,13 +150,17 @@ public abstract class AbstractWrapperOperator<T>
     }
 
     protected void setIterationContextRound(Integer contextRound) {
-        proxyOutput.setContextRound(contextRound);
-        epochWatermarkSupplier.set(contextRound);
+        //        proxyOutput.setContextRound(contextRound);
+        //        epochWatermarkSupplier.set(contextRound);
+
+        threadLocalContextRound.setValue(contextRound);
     }
 
     protected void clearIterationContextRound() {
-        proxyOutput.setContextRound(null);
-        epochWatermarkSupplier.set(null);
+        threadLocalContextRound.setValue(-1);
+        //
+        //        proxyOutput.setContextRound(null);
+        //        epochWatermarkSupplier.set(null);
     }
 
     @Override

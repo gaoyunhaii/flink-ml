@@ -21,6 +21,7 @@ package org.apache.flink.iteration.minibatch.operator.wrapper;
 import org.apache.flink.iteration.IterationRecord;
 import org.apache.flink.iteration.minibatch.MiniBatchRecord;
 import org.apache.flink.iteration.minibatch.operator.WrapperOperator;
+import org.apache.flink.iteration.minibatch.operator.adapter.OneInputMiniBatchProcessor;
 import org.apache.flink.iteration.operator.OperatorUtils;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.Input;
@@ -41,21 +42,31 @@ public class OneInputMiniBatchWrapperOperator<IN, OUT>
 
     private final StreamRecord<IterationRecord<IN>> reused;
 
+    private final OneInputMiniBatchProcessor<IN> miniBatchProcessor;
+
     public OneInputMiniBatchWrapperOperator(
             StreamOperatorParameters<MiniBatchRecord<OUT>> parameters,
             StreamOperatorFactory<IterationRecord<OUT>> operatorFactory,
             int miniBatchRecords) {
         super(parameters, operatorFactory, miniBatchRecords);
         reused = new StreamRecord<>(null, 0);
+        miniBatchProcessor = (OneInputMiniBatchProcessor<IN>) getWrappedOperator();
     }
 
     @Override
     public void processElement(StreamRecord<MiniBatchRecord<IN>> streamRecord) throws Exception {
         // System.out.println(Thread.currentThread().getName() + " is processing " + streamRecord);
-        for (IterationRecord<IN> record : streamRecord.getValue().getRecords()) {
-            reused.replace(record);
-            wrappedOperator.setKeyContextElement(reused);
-            wrappedOperator.processElement(reused);
+        //        for (IterationRecord<IN> record : streamRecord.getValue().getRecords()) {
+        //            reused.replace(record);
+        //            wrappedOperator.setKeyContextElement(reused);
+        //            wrappedOperator.processElement(reused);
+        //        }
+        IterationRecord.Type type = streamRecord.getValue().getRecords().get(0).getType();
+        int epoch = streamRecord.getValue().getRecords().get(0).getEpoch();
+        if (type == IterationRecord.Type.RECORD) {
+            miniBatchProcessor.processRecord(epoch, streamRecord.getValue().getRecords());
+        } else {
+            miniBatchProcessor.processEpochWatermark(streamRecord.getValue().getRecords().get(0));
         }
     }
 
